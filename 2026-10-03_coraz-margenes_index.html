@@ -1,0 +1,1363 @@
+<!DOCTYPE html>
+<html lang="es-AR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#14120f">
+<title>Márgenes · CORAZ</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+/* ============================================================
+   1. CONFIG VISUAL — variables de branding (cambiar acá para clonar
+      la app a otro negocio: paleta, radios, tipografía)
+   ============================================================ */
+:root{
+  --bg:#14120f; --panel:#1d1a15; --panel-2:#262119; --panel-3:#2f291f; --line:#3a3226;
+  --brand:#e8891a; --brand-dim:#8a5518; --brand-soft:rgba(232,137,26,.14);
+  --text:#f2ede2; --text-dim:#a89e8c; --text-mute:#7d7464;
+  --ok:#4a9d5f; --bad:#c14b3a; --warn:#d4a12a; --info:#4a8a9d;
+  --ok-soft:rgba(74,157,95,.15); --bad-soft:rgba(193,75,58,.16); --warn-soft:rgba(212,161,42,.15); --info-soft:rgba(74,138,157,.16);
+  --radius:12px; --radius-sm:8px;
+  --mono:"SF Mono","JetBrains Mono","Consolas",monospace;
+  --sans:-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased;min-height:100vh}
+a{color:var(--brand)}
+button{font-family:inherit}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.oculto{display:none!important}
+.dim{color:var(--text-dim)} .mute{color:var(--text-mute)}
+.pos{color:var(--ok)} .neg{color:var(--bad)}
+
+/* ---------- Header ---------- */
+header.top{position:sticky;top:0;z-index:30;background:rgba(20,18,15,.96);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.top-row{display:flex;align-items:center;gap:12px;padding:12px 16px;max-width:1280px;margin:0 auto}
+.top-row h1{margin:0;font-size:14px;letter-spacing:.14em;text-transform:uppercase;color:var(--brand);font-weight:700;white-space:nowrap}
+.top-row h1 span{color:var(--text-dim);font-weight:400;letter-spacing:.06em}
+.top-acc{margin-left:auto;display:flex;gap:8px;align-items:center}
+.chip-btn{background:transparent;border:1px solid var(--line);color:var(--text-dim);border-radius:99px;padding:5px 11px;font-size:12px;cursor:pointer;white-space:nowrap}
+.chip-btn:hover{border-color:var(--brand);color:var(--brand)}
+nav.tabs{display:flex;gap:2px;overflow-x:auto;padding:0 12px;max-width:1280px;margin:0 auto;scrollbar-width:none}
+nav.tabs::-webkit-scrollbar{display:none}
+nav.tabs button{background:none;border:none;color:var(--text-dim);padding:10px 12px 11px;font-size:13px;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap}
+nav.tabs button:hover{color:var(--text)}
+nav.tabs button.activo{color:var(--brand);border-bottom-color:var(--brand)}
+
+/* ---------- Layout ---------- */
+main{max-width:1280px;margin:0 auto;padding:16px 16px 80px}
+.barra-filtros{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px;padding:10px 12px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius)}
+.barra-filtros .sep{flex:1}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:99px;overflow-x:auto;max-width:100%;scrollbar-width:none}
+.seg::-webkit-scrollbar{display:none}
+.seg button{background:none;border:none;color:var(--text-dim);padding:6px 11px;font-size:12px;cursor:pointer;white-space:nowrap;flex:0 0 auto}
+.seg button.activo{background:var(--brand-soft);color:var(--brand)}
+.seg button:hover:not(.activo){color:var(--text)}
+input,select,textarea{background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:var(--radius-sm);padding:7px 9px;font-size:13px;font-family:inherit}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--brand)}
+input[type=date]{color-scheme:dark}
+textarea{width:100%;font-family:var(--mono);font-size:12.5px;resize:vertical}
+label.chk{display:inline-flex;gap:6px;align-items:center;font-size:12px;color:var(--text-dim);cursor:pointer;user-select:none}
+.periodo-txt{font-size:12px;color:var(--text-dim)}
+section.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin-bottom:14px}
+section.card h2{margin:0 0 12px;font-size:12px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-dim);font-weight:600;display:flex;align-items:center;gap:8px}
+section.card h2 .der{margin-left:auto;text-transform:none;letter-spacing:0;font-weight:400}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media (max-width:900px){.grid2{grid-template-columns:1fr}}
+
+/* ---------- KPIs ---------- */
+.kpis{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px;margin-bottom:14px}
+.kpi{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px 12px}
+.kpi.destacado{border-color:var(--brand-dim);background:linear-gradient(180deg,var(--brand-soft),var(--panel) 70%)}
+.kpi-label{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--text-dim);padding-right:22px}
+.kpi-valor{font-family:var(--mono);font-size:22px;font-weight:700;margin-top:4px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kpi-sub{font-size:11.5px;color:var(--text-dim);margin-top:2px}
+.ayuda{position:absolute;top:9px;right:9px;width:18px;height:18px;border-radius:50%;border:1px solid var(--line);background:var(--panel-2);color:var(--text-dim);font-size:10.5px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0}
+.ayuda:hover,.ayuda.abierta{border-color:var(--brand);color:var(--brand)}
+.ayuda-inline{position:static;display:inline-flex;vertical-align:middle;margin-left:4px}
+#popover{position:fixed;z-index:200;max-width:300px;background:var(--panel-3);border:1px solid var(--brand-dim);border-radius:var(--radius-sm);padding:11px 13px;font-size:12.5px;line-height:1.5;color:var(--text);box-shadow:0 10px 30px rgba(0,0,0,.5)}
+#popover b{color:var(--brand)}
+#popover .pv-sec{margin-top:6px;color:var(--text-dim)}
+
+/* ---------- Avisos ---------- */
+.aviso{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:var(--radius-sm);font-size:12.5px;margin-bottom:10px;border:1px solid}
+.aviso.warn{background:var(--warn-soft);border-color:rgba(212,161,42,.35)}
+.aviso.info{background:var(--info-soft);border-color:rgba(74,138,157,.35)}
+.aviso.bad{background:var(--bad-soft);border-color:rgba(193,75,58,.4)}
+.aviso .ico{font-size:15px;line-height:1.2}
+
+/* ---------- Tablas ---------- */
+.tabla-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius-sm)}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{position:sticky;top:0;background:var(--panel-2);color:var(--text-dim);font-weight:600;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;text-align:left;padding:8px 10px;white-space:nowrap;cursor:pointer;user-select:none;border-bottom:1px solid var(--line)}
+th.num,td.num{text-align:right}
+th:hover{color:var(--text)}
+th .flecha{color:var(--brand);margin-left:3px}
+td{padding:8px 10px;border-bottom:1px solid rgba(58,50,38,.55);white-space:nowrap}
+td.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+tbody tr{cursor:default}
+tbody tr.click{cursor:pointer}
+tbody tr:hover{background:rgba(232,137,26,.05)}
+td.titulo{max-width:280px;overflow:hidden;text-overflow:ellipsis}
+.mas{display:block;margin:10px auto 0}
+
+/* ---------- Badges / semáforo ---------- */
+.badge{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;padding:2px 8px;border-radius:99px;border:1px solid;white-space:nowrap;font-weight:600}
+.b-ok{color:#7cc68e;border-color:rgba(74,157,95,.45);background:var(--ok-soft)}
+.b-bajo{color:#e6c25e;border-color:rgba(212,161,42,.45);background:var(--warn-soft)}
+.b-neg{color:#e57a69;border-color:rgba(193,75,58,.5);background:var(--bad-soft)}
+.b-sin{color:var(--text-dim);border-color:var(--line);background:var(--panel-2)}
+.b-est{color:#8fc0cf;border-color:rgba(74,138,157,.45);background:var(--info-soft);font-weight:500}
+.b-neutro{color:var(--text-dim);border-color:var(--line);background:transparent;font-weight:500}
+
+/* ---------- Botones ---------- */
+.btn{background:var(--brand);color:#1a1208;border:none;border-radius:var(--radius-sm);padding:9px 15px;font-size:13px;font-weight:700;cursor:pointer}
+.btn:hover{filter:brightness(1.08)}
+.btn:disabled{background:var(--brand-dim);opacity:.6;cursor:not-allowed}
+.btn.sec{background:transparent;color:var(--text);border:1px solid var(--line);font-weight:500}
+.btn.sec:hover{border-color:var(--brand);color:var(--brand)}
+.btn.peligro{background:var(--bad);color:#fff}
+.btn.chico{padding:5px 10px;font-size:12px}
+
+/* ---------- Estados ---------- */
+.estado{display:flex;flex-direction:column;align-items:center;gap:10px;padding:40px 16px;color:var(--text-dim);text-align:center;font-size:13px}
+.spinner{width:26px;height:26px;border:2px solid var(--line);border-top-color:var(--brand);border-radius:50%;animation:gira .8s linear infinite}
+@keyframes gira{to{transform:rotate(360deg)}}
+.estado.error{color:#e57a69}
+
+/* ---------- Cascada (waterfall) ---------- */
+.cascada{display:flex;flex-direction:column;gap:5px}
+.cas-fila{display:grid;grid-template-columns:140px 1fr 168px;gap:10px;align-items:center;font-size:12.5px}
+.cas-fila .lbl{color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cas-fila.total .lbl{color:var(--text);font-weight:700}
+.cas-pista{position:relative;height:16px;background:rgba(58,50,38,.35);border-radius:4px}
+.cas-bar{position:absolute;top:0;bottom:0;border-radius:4px;min-width:2px}
+.cas-bar.sub{background:var(--brand)}
+.cas-bar.res{background:#6d5a44}
+.cas-bar.fin-pos{background:var(--ok)}
+.cas-bar.fin-neg{background:var(--bad)}
+.cas-fila .val{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.cas-fila .pct{color:var(--text-mute);font-size:10.5px;margin-left:5px;display:inline-block;min-width:44px;text-align:right}
+@media (max-width:560px){.cas-fila{grid-template-columns:96px 1fr 98px;font-size:11.5px}.cas-fila .pct{display:none}}
+
+/* ---------- Gráfico mensual ---------- */
+.chart{width:100%;height:240px;position:relative}
+.chart svg{width:100%;height:100%;overflow:visible}
+.chart .grid line{stroke:rgba(168,158,140,.13)}
+.chart text{fill:var(--text-mute);font-size:10.5px;font-family:var(--sans)}
+.chart .bar{fill:var(--brand)}
+.chart .bar.negativa{fill:var(--bad)}
+.chart .hit{fill:transparent;cursor:pointer}
+.chart .hit:hover+.bar,.chart .bar.hover{filter:brightness(1.25)}
+#tip{position:fixed;z-index:150;pointer-events:none;background:var(--panel-3);border:1px solid var(--line);border-radius:var(--radius-sm);padding:8px 10px;font-size:12px;line-height:1.55;box-shadow:0 8px 24px rgba(0,0,0,.45);min-width:170px}
+#tip .t-tit{font-weight:700;margin-bottom:3px}
+#tip .t-row{display:flex;justify-content:space-between;gap:14px}
+#tip .t-row span:last-child{font-family:var(--mono)}
+
+/* ---------- Modal ---------- */
+.modal-fondo{position:fixed;inset:0;z-index:120;background:rgba(0,0,0,.62);display:flex;align-items:flex-start;justify-content:center;padding:40px 12px;overflow-y:auto}
+.modal{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);width:100%;max-width:720px;padding:18px 18px 20px;position:relative}
+.modal h3{margin:0 0 4px;font-size:16px}
+.modal .cerrar{position:absolute;top:12px;right:12px}
+.meta-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px 14px;margin:14px 0;font-size:12.5px}
+.meta-grid div span{display:block;font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-mute)}
+.func h4{color:var(--brand);margin:16px 0 4px;font-size:13px}
+.func p,.func li{font-size:13px;color:var(--text);line-height:1.6}
+.func ul{padding-left:18px;margin:4px 0}
+
+/* ---------- Formularios ---------- */
+.form-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}
+.campo label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-dim);margin-bottom:4px}
+.campo input,.campo select{width:100%}
+.campo .hint{font-size:11.5px;color:var(--text-mute);margin-top:3px}
+.acciones{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;align-items:center}
+.progreso{margin-top:10px;font-size:12.5px;color:var(--text-dim)}
+.progreso .barra{height:6px;background:var(--panel-2);border-radius:99px;overflow:hidden;margin-top:6px}
+.progreso .barra div{height:100%;background:var(--brand);transition:width .25s}
+.calc-res{font-family:var(--mono);font-size:30px;font-weight:700;color:var(--brand)}
+
+/* ---------- Gate / login ---------- */
+#gate{position:fixed;inset:0;z-index:300;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:16px}
+#gate .caja{width:100%;max-width:360px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:26px 22px}
+#gate h1{margin:0 0 4px;text-align:center;font-size:15px;letter-spacing:.14em;text-transform:uppercase;color:var(--brand)}
+#gate .sub{text-align:center;color:var(--text-dim);font-size:12.5px;margin-bottom:20px}
+#gate input{width:100%;font-size:16px;padding:11px 10px;margin-bottom:10px}
+#gate .btn{width:100%;padding:12px}
+#gate .err{color:#e57a69;font-size:12.5px;min-height:18px;margin-top:8px;text-align:center}
+#cdnFail{position:fixed;inset:0;z-index:400;background:var(--bg);display:none;align-items:center;justify-content:center;padding:24px;text-align:center}
+#cdnFail.show{display:flex}
+
+/* ---------- Toast ---------- */
+#toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:250;background:var(--panel-3);border:1px solid var(--line);border-radius:99px;padding:9px 16px;font-size:13px;box-shadow:0 8px 24px rgba(0,0,0,.4);opacity:0;pointer-events:none;transition:opacity .2s;max-width:92vw}
+#toast.show{opacity:1}
+#toast.ok{border-color:rgba(74,157,95,.6)} #toast.err{border-color:rgba(193,75,58,.6)}
+
+@media (max-width:560px){
+  main{padding:12px 12px 70px}
+  .kpis{grid-template-columns:repeat(2,1fr);gap:8px}
+  .kpi-valor{font-size:18px}
+  .top-row h1 span{display:none}
+}
+</style>
+</head>
+<body>
+
+<div id="cdnFail"><div><h2 style="color:var(--brand)">No se pudo cargar la librería de Supabase</h2><p class="dim">Revisá tu conexión y recargá la página.</p><button class="btn" onclick="location.reload()">Recargar</button></div></div>
+
+<!-- ================= LOGIN ================= -->
+<div id="gate">
+  <div class="caja">
+    <h1 id="gateTitulo">Márgenes</h1>
+    <div class="sub">Margen real por operación de Mercado Libre</div>
+    <input id="gateEmail" type="email" placeholder="Email" autocomplete="username">
+    <input id="gatePass" type="password" placeholder="Contraseña" autocomplete="current-password">
+    <button class="btn" id="gateBtn">Ingresar</button>
+    <div class="err" id="gateError"></div>
+  </div>
+</div>
+
+<!-- ================= APP ================= -->
+<div id="app" class="oculto">
+  <header class="top">
+    <div class="top-row">
+      <h1 id="appTitulo">Márgenes <span>· por operación</span></h1>
+      <div class="top-acc">
+        <button class="chip-btn" id="btnFunc">📖 Funcionamiento de la app</button>
+        <button class="chip-btn" id="btnLogout" title="Cerrar sesión">Salir</button>
+      </div>
+    </div>
+    <nav class="tabs" id="tabs"></nav>
+  </header>
+
+  <main>
+    <!-- Filtro global de período (aplica a Resumen, Operaciones, Agrupado y Alertas) -->
+    <div class="barra-filtros" id="barraPeriodo">
+      <div class="seg" id="segPeriodo"></div>
+      <span id="rangoCustom" class="oculto" style="display:inline-flex;gap:6px;align-items:center">
+        <input type="date" id="fDesde"> <span class="dim">→</span> <input type="date" id="fHasta">
+        <button class="btn chico" id="btnAplicarRango">Aplicar</button>
+      </span>
+      <span class="sep"></span>
+      <label class="chk" title="Excluye las operaciones cuyo costo viene del maestro o es demasiado viejo"><input type="checkbox" id="chkConfiables"> Solo costos confiables</label>
+      <span class="periodo-txt" id="periodoTxt"></span>
+      <button class="chip-btn" id="btnRecargar" title="Volver a pedir los datos">↻</button>
+    </div>
+
+    <div id="vista"></div>
+  </main>
+</div>
+
+<div id="popover" class="oculto"></div>
+<div id="tip" class="oculto"></div>
+<div id="toast"></div>
+<div id="modalRaiz"></div>
+
+<script>
+/* ============================================================
+   2. CONFIG (todo lo específico del negocio vive acá → clonable)
+   ============================================================ */
+const CONFIG = {
+  BRAND: { nombre: 'CORAZ', app: 'Márgenes' },
+  SUPABASE_URL: 'https://kvewsxrfogosjwehookj.supabase.co',
+  // anon key = clave PÚBLICA (publishable). Los datos están protegidos por RLS deny-all
+  // y por la Edge Function, que exige login + usuario activo en app_usuarios.
+  SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt2ZXdzeHJmb2dvc2p3ZWhvb2tqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU3OTA2OTksImV4cCI6MjEwMTM2NjY5OX0.6oyDPFG_8hAAULXCUn6uO7C-abxMSOxxMFFJ_xBFZHY',
+  FN: 'margenes-data',
+  ML_ORDEN_URL: (id) => `https://www.mercadolibre.com.ar/ventas/${encodeURIComponent(id)}/detalle`,
+  ML_ITEM_URL: (id) => `https://articulo.mercadolibre.com.ar/${String(id || '').replace(/^MLA/, 'MLA-')}`,
+  PERIODO_DEFAULT: '90d',
+  TIMEOUT_MS: 30000,
+  REINTENTOS: 2,
+  FILAS_POR_PAGINA: 150,
+  TANDA_COSTOS: 50,          // filas por llamada al guardar costos masivos
+  DIAS_STOCK_LENTO: 120,     // cobertura (días) a partir de la cual el stock se considera lento
+  APP_VERSION: '2026-10-03.1',
+};
+const STORAGE_KEY = 'margenes_prefs_v1';
+
+/* ============================================================
+   3. ESTADO
+   ============================================================ */
+if (typeof window.supabase === 'undefined') {
+  document.getElementById('cdnFail').classList.add('show');
+  throw new Error('supabase-js no cargó desde el CDN');
+}
+const sb = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
+
+const S = {
+  auth: null, email: null, puedeEditar: false,
+  tab: 'resumen',
+  periodo: CONFIG.PERIODO_DEFAULT, desde: null, hasta: null,
+  soloConfiables: false,
+  config: {},
+  ops: null, facturas: [], opsCargando: false, opsError: null, opsRango: null,
+  costos: null, costosCargando: false, costosError: null,
+  stock: null, stockCargando: false, stockError: null,
+  // estado por vista
+  opFiltro: { q: '', envio: 'todos', sem: 'todos', limite: CONFIG.FILAS_POR_PAGINA, orden: { col: 'sale_date', dir: -1 } },
+  agrup: { por: 'sku', orden: { col: 'margen', dir: -1 }, q: '' },
+  alertas: { incluirEstimados: false },
+  costosVista: { q: '', soloDif: false, orden: { col: 'sku', dir: 1 } },
+  stockVista: { soloLento: false, orden: { col: 'valor', dir: -1 } },
+  carga: { modo: 'lista', vigencia: null, proveedor: '', texto: '', preview: null, corriendo: false },
+};
+
+function guardarPrefs() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ tab: S.tab, periodo: S.periodo, desde: S.desde, hasta: S.hasta, soloConfiables: S.soloConfiables, agrupPor: S.agrup.por })); } catch (_) {}
+}
+function leerPrefs() {
+  try {
+    const p = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+    if (p.tab) S.tab = p.tab;
+    if (p.periodo) S.periodo = p.periodo;
+    if (p.desde) S.desde = p.desde;
+    if (p.hasta) S.hasta = p.hasta;
+    S.soloConfiables = !!p.soloConfiables;
+    if (p.agrupPor) S.agrup.por = p.agrupPor;
+  } catch (_) {}
+}
+
+/* ============================================================
+   4. UTILIDADES
+   ============================================================ */
+const fmtARS = new Intl.NumberFormat('es-AR', { maximumFractionDigits: 0 });
+const fmtDec = new Intl.NumberFormat('es-AR', { maximumFractionDigits: 1, minimumFractionDigits: 1 });
+const $ = (id) => document.getElementById(id);
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function n(v) { const x = Number(v); return isFinite(x) ? x : 0; }
+function plata(v, conSigno = false) {
+  if (v === null || v === undefined || v === '' || !isFinite(Number(v))) return '—';
+  const x = Math.round(Number(v));
+  return (conSigno && x > 0 ? '+' : '') + (x < 0 ? '−$' : '$') + fmtARS.format(Math.abs(x));
+}
+function pct(v) { return (v === null || v === undefined || !isFinite(Number(v))) ? '—' : fmtDec.format(Number(v)) + '%'; }
+function num(v) { return (v === null || v === undefined || !isFinite(Number(v))) ? '—' : fmtARS.format(Number(v)); }
+function hoyAR() { return new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10); }
+function sumarDias(iso, d) { const t = new Date(iso + 'T12:00:00Z'); t.setUTCDate(t.getUTCDate() + d); return t.toISOString().slice(0, 10); }
+function fechaCorta(iso) { if (!iso) return '—'; const [y, m, d] = String(iso).slice(0, 10).split('-'); return `${d}/${m}/${y.slice(2)}`; }
+function mesLargo(iso) { const [y, m] = String(iso).split('-'); return ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'][Number(m) - 1] + ' ' + y.slice(2); }
+function div(a, b) { return b ? a / b : null; }
+function parsearNumero(s) {
+  // acepta "3.317", "3317,50", "$ 3.317,5", "3317.5"
+  let t = String(s ?? '').replace(/[$\s]/g, '');
+  if (!t) return null;
+  if (t.includes(',')) t = t.replace(/\./g, '').replace(',', '.');
+  else if (/^\d{1,3}(\.\d{3})+$/.test(t)) t = t.replace(/\./g, '');
+  const x = Number(t);
+  return isFinite(x) ? x : NaN;
+}
+
+let toastTimer;
+function toast(msg, tipo = '') {
+  const t = $('toast'); t.textContent = msg; t.className = 'show ' + tipo;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.className = ''), 3800);
+}
+
+// Fetch robusto con timeout + reintentos (solo ante red/5xx)
+async function api(accion, payload = {}, { timeout = CONFIG.TIMEOUT_MS, reintentos = CONFIG.REINTENTOS } = {}) {
+  let ultimo;
+  for (let i = 0; i <= reintentos; i++) {
+    const ctrl = new AbortController();
+    const tm = setTimeout(() => ctrl.abort(), timeout);
+    try {
+      if (!S.auth) throw new Error('Sesión vencida: volvé a ingresar.');
+      const r = await fetch(`${CONFIG.SUPABASE_URL}/functions/v1/${CONFIG.FN}`, {
+        method: 'POST', signal: ctrl.signal,
+        headers: { 'Content-Type': 'application/json', Authorization: S.auth, apikey: CONFIG.SUPABASE_ANON_KEY },
+        body: JSON.stringify({ accion, ...payload }),
+      });
+      let data = null; try { data = await r.json(); } catch (_) {}
+      if (r.status === 401) { await sb.auth.signOut(); throw new Error('Sesión vencida o usuario sin acceso.'); }
+      if (!r.ok || !data || data.ok === false) {
+        const msg = (data && data.error) || `Error ${r.status}`;
+        if (r.status >= 500 && i < reintentos) { ultimo = new Error(msg); await esperar(700 * (i + 1)); continue; }
+        const e = new Error(msg); e.data = data; throw e;
+      }
+      return data;
+    } catch (e) {
+      ultimo = e.name === 'AbortError' ? new Error('La consulta tardó demasiado (timeout).') : e;
+      if ((e.name === 'AbortError' || e instanceof TypeError) && i < reintentos) { await esperar(700 * (i + 1)); continue; }
+      throw ultimo;
+    } finally { clearTimeout(tm); }
+  }
+  throw ultimo;
+}
+const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/* ---------- Ayuda "?" (popover) ---------- */
+// Toda métrica en pantalla lleva su "?": qué es · cómo se calcula · de dónde sale.
+const AYUDAS = {};
+function ayuda(key, que, calculo, fuente) { AYUDAS[key] = { que, calculo, fuente }; return `<button class="ayuda" data-ayuda="${key}" aria-label="Ayuda">?</button>`; }
+function ayudaInline(key, que, calculo, fuente) { return ayuda(key, que, calculo, fuente).replace('class="ayuda"', 'class="ayuda ayuda-inline"'); }
+document.addEventListener('click', (ev) => {
+  const b = ev.target.closest('[data-ayuda]');
+  const pop = $('popover');
+  document.querySelectorAll('.ayuda.abierta').forEach((x) => x !== b && x.classList.remove('abierta'));
+  if (!b) { if (!ev.target.closest('#popover')) pop.classList.add('oculto'); return; }
+  ev.stopPropagation();
+  if (b.classList.contains('abierta')) { b.classList.remove('abierta'); pop.classList.add('oculto'); return; }
+  const a = AYUDAS[b.dataset.ayuda]; if (!a) return;
+  pop.innerHTML = `<div>${a.que}</div>${a.calculo ? `<div class="pv-sec"><b>Cálculo:</b> ${a.calculo}</div>` : ''}${a.fuente ? `<div class="pv-sec"><b>Fuente:</b> ${a.fuente}</div>` : ''}`;
+  pop.classList.remove('oculto'); b.classList.add('abierta');
+  const r = b.getBoundingClientRect(); const w = Math.min(300, window.innerWidth - 24);
+  pop.style.width = w + 'px';
+  pop.style.left = Math.max(12, Math.min(window.innerWidth - w - 12, r.right - w)) + 'px';
+  const alto = pop.offsetHeight;
+  pop.style.top = (r.bottom + 8 + alto > window.innerHeight ? Math.max(12, r.top - alto - 8) : r.bottom + 8) + 'px';
+});
+window.addEventListener('scroll', () => { $('popover').classList.add('oculto'); document.querySelectorAll('.ayuda.abierta').forEach((x) => x.classList.remove('abierta')); }, true);
+
+function kpi({ label, valor, sub = '', key, que, calculo, fuente, clase = '', destacado = false }) {
+  return `<div class="kpi ${destacado ? 'destacado' : ''}">${ayuda(key, que, calculo, fuente)}
+    <div class="kpi-label">${label}</div><div class="kpi-valor ${clase}">${valor}</div>${sub ? `<div class="kpi-sub">${sub}</div>` : ''}</div>`;
+}
+function estadoCarga(txt = 'Cargando…', inicio) {
+  return `<div class="estado"><div class="spinner"></div><div>${txt}</div>${inicio ? `<div class="mute" data-reloj="${inicio}">0 s</div>` : ''}</div>`;
+}
+setInterval(() => document.querySelectorAll('[data-reloj]').forEach((el) => {
+  const s = Math.round((Date.now() - Number(el.dataset.reloj)) / 1000);
+  el.textContent = `${s} s — suele tardar entre 2 y 8 s`;
+}), 1000);
+function estadoError(msg, accion) { return `<div class="estado error"><div>⚠️ ${esc(msg)}</div>${accion ? `<button class="btn sec chico" data-accion="${accion}">Reintentar</button>` : ''}</div>`; }
+function estadoVacio(msg) { return `<div class="estado"><div style="font-size:22px">∅</div><div>${msg}</div></div>`; }
+
+function badgeSem(s) {
+  return {
+    ok: '<span class="badge b-ok">✓ OK</span>',
+    bajo: '<span class="badge b-bajo">▲ Bajo</span>',
+    negativo: '<span class="badge b-neg">✕ Negativo</span>',
+    sin_costo: '<span class="badge b-sin">? Sin costo</span>',
+  }[s] || '';
+}
+function badgeEst(o) { return o.costo_completo && !o.costo_confiable ? ' <span class="badge b-est" title="Costo del maestro o con más días que el máximo configurado">≈ estimado</span>' : ''; }
+
+/* ---------- Ordenamiento genérico de tablas ---------- */
+function ordenar(filas, orden) {
+  const { col, dir } = orden;
+  return [...filas].sort((a, b) => {
+    const va = a[col], vb = b[col];
+    if (va === vb) return 0;
+    if (va === null || va === undefined || va === '') return 1;   // vacíos siempre al final
+    if (vb === null || vb === undefined || vb === '') return -1;
+    if (typeof va === 'number' && typeof vb === 'number') return (va - vb) * dir;
+    return String(va).localeCompare(String(vb), 'es', { numeric: true }) * dir;
+  });
+}
+function th(col, label, orden, numCol = false, ayudaHtml = '') {
+  const fl = orden.col === col ? `<span class="flecha">${orden.dir > 0 ? '▲' : '▼'}</span>` : '';
+  return `<th class="${numCol ? 'num' : ''}" data-orden="${col}">${label}${fl}${ayudaHtml}</th>`;
+}
+function cambiarOrden(orden, col) { if (orden.col === col) orden.dir *= -1; else { orden.col = col; orden.dir = -1; } }
+
+/* ============================================================
+   5. PERÍODO
+   ============================================================ */
+const PERIODOS = [
+  { id: '30d', label: '30 días' }, { id: '90d', label: '90 días' }, { id: 'mes', label: 'Mes actual' },
+  { id: 'mesant', label: 'Mes anterior' }, { id: '12m', label: '12 meses' }, { id: 'todo', label: 'Todo' }, { id: 'custom', label: 'Rango…' },
+];
+function rangoPeriodo() {
+  const hoy = hoyAR();
+  switch (S.periodo) {
+    case '30d': return [sumarDias(hoy, -29), hoy];
+    case '90d': return [sumarDias(hoy, -89), hoy];
+    case 'mes': return [hoy.slice(0, 8) + '01', hoy];
+    case 'mesant': { const ini = new Date(hoy.slice(0, 8) + '01T12:00:00Z'); ini.setUTCMonth(ini.getUTCMonth() - 1); const d = ini.toISOString().slice(0, 10); return [d, sumarDias(hoy.slice(0, 8) + '01', -1)]; }
+    case '12m': return [sumarDias(hoy, -364), hoy];
+    case 'todo': return [S.config.desde || '2025-08-01', hoy];
+    case 'custom': return [S.desde || sumarDias(hoy, -89), S.hasta || hoy];
+    default: return [sumarDias(hoy, -89), hoy];
+  }
+}
+function renderBarraPeriodo() {
+  $('segPeriodo').innerHTML = PERIODOS.map((p) => `<button data-periodo="${p.id}" class="${S.periodo === p.id ? 'activo' : ''}">${p.label}</button>`).join('');
+  $('rangoCustom').classList.toggle('oculto', S.periodo !== 'custom');
+  const [d, h] = rangoPeriodo();
+  $('fDesde').value = d; $('fHasta').value = h;
+  $('periodoTxt').textContent = `${fechaCorta(d)} → ${fechaCorta(h)}`;
+  $('chkConfiables').checked = S.soloConfiables;
+  const usaPeriodo = ['resumen', 'operaciones', 'agrupado', 'alertas', 'calculadora'].includes(S.tab);
+  $('barraPeriodo').classList.toggle('oculto', !usaPeriodo);
+}
+
+/* ============================================================
+   6. CARGA DE DATOS
+   ============================================================ */
+async function cargarConfig() {
+  const r = await api('config');
+  S.config = r.config || {}; S.puedeEditar = !!r.puede_editar; S.email = r.email;
+}
+async function cargarOps(forzar = false) {
+  const [from, to] = rangoPeriodo();
+  const clave = from + '|' + to;
+  if (!forzar && S.ops && S.opsRango === clave) return;
+  S.opsCargando = true; S.opsError = null; S.opsInicio = Date.now(); render();
+  try {
+    const r = await api('operaciones', { from, to });
+    S.ops = (r.filas || []).map(normalizarOp); S.facturas = r.facturas || []; S.config = r.config || S.config; S.opsRango = clave;
+  } catch (e) { S.opsError = e.message; S.ops = null; }
+  S.opsCargando = false; render();
+}
+function normalizarOp(o) {
+  const nums = ['units','cuotas','cupon_ml','precio_lista_unit','precio_cobrado_unit','descuento_unit','descuento_pct','bruto','comision','comision_pct','envio','neto_ml','costo_unit','costo_total','costo_antiguedad_dias','brown','embalaje','prorrateo_facturas','margen','margen_pct_neto','margen_pct_precio'];
+  nums.forEach((k) => { o[k] = o[k] === null || o[k] === undefined ? null : Number(o[k]); });
+  o.lista_total = n(o.precio_lista_unit) * n(o.units);
+  o.descuento_total = n(o.descuento_unit) * n(o.units);
+  return o;
+}
+async function cargarCostos(forzar = false) {
+  if (S.costos && !forzar) return;
+  S.costosCargando = true; S.costosError = null; S.costosInicio = Date.now(); render();
+  try { S.costos = await api('costos'); } catch (e) { S.costosError = e.message; }
+  S.costosCargando = false; render();
+}
+async function cargarStock(forzar = false) {
+  if (S.stock && !forzar) return;
+  S.stockCargando = true; S.stockError = null; S.stockInicio = Date.now(); render();
+  try { const r = await api('stock'); S.stock = (r.filas || []).map((f) => { ['propio','en_full','total','costo_unit','valor','costo_maestro','valor_maestro','unidades_60d','dias_cobertura'].forEach((k) => f[k] = f[k] === null ? null : Number(f[k])); return f; }); } catch (e) { S.stockError = e.message; }
+  S.stockCargando = false; render();
+}
+
+/* ============================================================
+   7. CÁLCULOS (agregaciones en el navegador sobre las líneas)
+   ============================================================ */
+function opsFiltradas() {
+  if (!S.ops) return [];
+  return S.soloConfiables ? S.ops.filter((o) => o.costo_confiable) : S.ops;
+}
+// Agrega un conjunto de líneas → totales de la cascada
+function agregar(lineas) {
+  const t = { lineas: lineas.length, ordenes: new Set(), unidades: 0, lista: 0, descuento: 0, bruto: 0, comision: 0, envio: 0, neto: 0,
+    costo: 0, brown: 0, embalaje: 0, prorrateo: 0, margen: 0, netoConCosto: 0, brutoConCosto: 0, conCosto: 0, confiables: 0, neg: 0, bajo: 0, sinCosto: 0, conDescuento: 0 };
+  for (const o of lineas) {
+    t.ordenes.add(o.ml_order_id);
+    t.unidades += n(o.units); t.lista += o.lista_total; t.descuento += o.descuento_total; t.bruto += n(o.bruto);
+    t.comision += n(o.comision); t.envio += n(o.envio); t.neto += n(o.neto_ml);
+    if (o.descuento_total > 0) t.conDescuento++;
+    if (o.costo_confiable) t.confiables++;
+    if (o.semaforo === 'negativo') t.neg++; else if (o.semaforo === 'bajo') t.bajo++; else if (o.semaforo === 'sin_costo') t.sinCosto++;
+    if (o.costo_completo) {
+      t.conCosto++; t.costo += n(o.costo_total); t.brown += n(o.brown); t.embalaje += n(o.embalaje);
+      t.prorrateo += n(o.prorrateo_facturas); t.margen += n(o.margen); t.netoConCosto += n(o.neto_ml); t.brutoConCosto += n(o.bruto);
+    }
+  }
+  t.ordenes = t.ordenes.size;
+  // con neto ≤ 0 el % sobre neto no tiene sentido (daría >100% o signo invertido)
+  t.margenPctNeto = t.netoConCosto > 0 ? 100 * t.margen / t.netoConCosto : null;
+  t.margenPctPrecio = t.brutoConCosto > 0 ? 100 * t.margen / t.brutoConCosto : null;
+  t.comisionPct = t.bruto ? 100 * t.comision / t.bruto : null;
+  t.envioProm = t.ordenes ? t.envio / t.ordenes : null;
+  t.descuentoPct = t.lista ? 100 * t.descuento / t.lista : null;
+  t.coberturaConfiable = t.lineas ? 100 * t.confiables / t.lineas : null;
+  t.margenPorUnidad = t.unidades ? t.margen / t.unidades : null;
+  return t;
+}
+function agruparPor(lineas, claveFn, labelFn) {
+  const m = new Map();
+  for (const o of lineas) { const k = claveFn(o); if (!m.has(k)) m.set(k, []); m.get(k).push(o); }
+  return [...m.entries()].map(([k, ls]) => {
+    const t = agregar(ls);
+    return { clave: k, label: labelFn ? labelFn(ls[0], k) : k, ...t, precioProm: t.unidades ? t.bruto / t.unidades : null, ultima: ls.reduce((a, o) => (o.fecha > a ? o.fecha : a), '') };
+  });
+}
+
+/* ============================================================
+   8. RENDER — infraestructura
+   ============================================================ */
+const TABS = [
+  { id: 'resumen', label: '📊 Resumen' },
+  { id: 'operaciones', label: '🧾 Operaciones' },
+  { id: 'agrupado', label: '📦 SKU · Publicación · Mes' },
+  { id: 'alertas', label: '🚨 Alertas' },
+  { id: 'costos', label: '💲 Costos' },
+  { id: 'stock', label: '🏷️ Stock valorizado' },
+  { id: 'calculadora', label: '🧮 Precio piso' },
+  { id: 'ajustes', label: '⚙️ Ajustes y facturas ML' },
+];
+function renderTabs() { $('tabs').innerHTML = TABS.map((t) => `<button data-tab="${t.id}" class="${S.tab === t.id ? 'activo' : ''}">${t.label}</button>`).join(''); }
+
+function render() {
+  renderTabs(); renderBarraPeriodo();
+  const v = $('vista');
+  try {
+    const fn = { resumen: vistaResumen, operaciones: vistaOperaciones, agrupado: vistaAgrupado, alertas: vistaAlertas,
+      costos: vistaCostos, stock: vistaStock, calculadora: vistaCalculadora, ajustes: vistaAjustes }[S.tab] || vistaResumen;
+    v.innerHTML = fn();
+    if (S.tab === 'resumen') montarGraficoMensual();
+    if (S.tab === 'calculadora') calcularPrecioPiso();
+  } catch (e) {
+    console.error(e);
+    v.innerHTML = estadoError('Error al dibujar la pantalla: ' + e.message, 'recargar');
+  }
+}
+function necesitaOps() {
+  if (S.opsCargando) return estadoCarga('Calculando márgenes por operación…', S.opsInicio);
+  if (S.opsError) return estadoError(S.opsError, 'recargar');
+  if (!S.ops) return estadoCarga('Preparando…');
+  return null;
+}
+function avisosConfig() {
+  const c = S.config || {}; const out = [];
+  if (c.brown_tarifa_flex == null) out.push('Brown Flex <b>no se descuenta</b> todavía (tarifa sin definir). Configuralo en ⚙️ Ajustes.');
+  if (c.prorrateo_criterio == null) out.push('Las facturas mensuales de ML <b>no se prorratean</b> todavía (criterio sin definir).');
+  if (c.embalaje_por_orden == null) out.push('Embalaje por orden sin cargar (no se descuenta).');
+  if (!out.length) return '';
+  return `<div class="aviso info"><span class="ico">ℹ️</span><div>El margen todavía <b>no incluye</b>: ${out.map((x) => '<br>• ' + x).join('')}<br><span class="dim">Tampoco incluye retenciones/impuestos de MP ni devoluciones (se suman en la fase de conciliación).</span></div></div>`;
+}
+
+/* ============================================================
+   9. VISTA: RESUMEN
+   ============================================================ */
+function vistaResumen() {
+  const bloq = necesitaOps(); if (bloq) return bloq;
+  const ls = opsFiltradas();
+  if (!ls.length) return estadoVacio('No hay ventas en el período elegido.');
+  const t = agregar(ls);
+  const facturasPeriodo = S.facturas.reduce((a, f) => a + n(f.importe), 0);
+  const umbral = n(S.config.umbral_margen_pct || 15);
+  return `
+  ${avisosConfig()}
+  <div class="kpis">
+    ${kpi({ label: 'Margen real', valor: plata(t.margen), sub: `${pct(t.margenPctNeto)} del neto · ${pct(t.margenPctPrecio)} del precio`, destacado: true, clase: t.margen < 0 ? 'neg' : '',
+      key: 'k_margen', que: 'Lo que queda de las ventas después de pagar todo lo que hoy se puede medir.', calculo: 'Σ (neto ML − costo de mercadería − Brown − embalaje − prorrateo de facturas ML), solo líneas con costo.', fuente: 'Ventas ML (ml_ventas_lineas) + costo vigente a la fecha de cada venta (compras / costos manuales / maestro).' })}
+    ${kpi({ label: 'Facturación bruta', valor: plata(t.bruto), sub: `${num(t.ordenes)} órdenes · ${num(t.unidades)} u`,
+      key: 'k_bruto', que: 'Lo que pagaron los compradores por los productos (sin envío).', calculo: 'Σ precio cobrado × unidades.', fuente: 'gross_amount de cada línea de venta ML (no canceladas).' })}
+    ${kpi({ label: 'Neto ML', valor: plata(t.neto), sub: `${pct(t.bruto ? 100 * t.neto / t.bruto : null)} del bruto`,
+      key: 'k_neto', que: 'Lo que ML te deja después de su comisión y del envío a tu cargo.', calculo: 'Bruto − comisión − envío (cierra exacto en el 100% de las líneas desde ago-2025).', fuente: 'net_amount de ml_ventas_lineas.' })}
+    ${kpi({ label: 'Costo mercadería', valor: plata(t.costo), sub: `${pct(t.netoConCosto ? 100 * t.costo / t.netoConCosto : null)} del neto`,
+      key: 'k_costo', que: 'Costo de lo vendido, con el costo vigente el día de cada venta.', calculo: 'Σ costo unitario × unidades. Kits = Σ componentes × cantidad. BBA: lista × (1+IVA) × (1−4%).', fuente: 'Última compra con precio anterior a la venta (compras), costos manuales o, si no hay, el maestro (productos_costo).' })}
+    ${kpi({ label: 'Comisión ML', valor: plata(t.comision), sub: `${pct(t.comisionPct)} efectiva`,
+      key: 'k_com', que: 'Cargo por venta de ML (incluye costo fijo y financiación de cuotas).', calculo: 'Σ sale_fee / Σ bruto.', fuente: 'fees_amount = sale_fee de cada orden.' })}
+    ${kpi({ label: 'Envío a cargo', valor: plata(t.envio), sub: `${plata(t.envioProm)} promedio por orden`,
+      key: 'k_env', que: 'Lo que ML te descuenta por el envío (Mercado Envíos).', calculo: 'Σ shipping_cost / órdenes.', fuente: 'shipping_cost de cada línea.' })}
+    ${kpi({ label: 'Descuentos', valor: plata(t.descuento), sub: `${pct(t.descuentoPct)} de la lista · ${num(t.conDescuento)} líneas`,
+      key: 'k_desc', que: 'Diferencia entre el precio de lista y el precio efectivamente cobrado (promos, campañas).', calculo: 'Σ (precio lista − precio cobrado) × unidades.', fuente: 'gross_price vs unit_price del pedido (raw_json). Falta confirmar qué parte bonifica ML.' })}
+    ${kpi({ label: 'Margen por unidad', valor: plata(t.margenPorUnidad), sub: `umbral de alerta ${pct(umbral)} s/neto`,
+      key: 'k_mu', que: 'Margen promedio que deja cada unidad vendida.', calculo: 'Margen real / unidades vendidas.', fuente: 'Mismas líneas que el margen real.' })}
+    ${kpi({ label: 'Alertas', valor: `${num(t.neg)} · ${num(t.bajo)}`, sub: 'negativas · bajo umbral', clase: t.neg ? 'neg' : '',
+      key: 'k_alert', que: 'Líneas con margen negativo o por debajo del umbral.', calculo: `Negativo: margen < 0. Bajo: margen < ${umbral}% del neto.`, fuente: 'Semáforo de v_margen_operacion. Ver pestaña 🚨 Alertas.' })}
+    ${kpi({ label: 'Costo confiable', valor: pct(t.coberturaConfiable), sub: `${num(t.confiables)} de ${num(t.lineas)} líneas · ${num(t.sinCosto)} sin costo`,
+      key: 'k_conf', que: 'Qué parte de las ventas tiene un costo bien respaldado.', calculo: `Confiable = costo de compras o manual, con no más de ${n(S.config.costo_max_antiguedad_dias || 120)} días de antigüedad respecto de la venta.`, fuente: 'Las demás usan el maestro (valor de hoy) o una compra vieja → “≈ estimado”.' })}
+    ${facturasPeriodo ? kpi({ label: 'Facturas ML cargadas', valor: plata(facturasPeriodo), sub: S.config.prorrateo_criterio ? 'prorrateadas en el margen' : 'sin prorratear (definir criterio)',
+      key: 'k_fac', que: 'Cargos mensuales de ML aparte de la comisión por venta (publicidad, Full, etc.).', calculo: 'Σ importes cargados para los meses del período.', fuente: 'Tabla ml_facturas_mensuales (pestaña ⚙️).' }) : ''}
+  </div>
+
+  <div class="grid2">
+    <section class="card"><h2>Cascada del período ${ayudaInline('c_cas', 'Cómo se va del precio de lista al margen real, sumando todas las líneas del período.', 'Cada barra resta (o es un subtotal) sobre la anterior. Los porcentajes son sobre el precio de lista.', 'Mismas líneas que los KPIs.')}</h2>
+      ${cascadaHtml({ lista: t.lista, descuento: t.descuento, bruto: t.bruto, comision: t.comision, envio: t.envio, neto: t.neto, costo: t.costo, brown: t.brown, embalaje: t.embalaje, prorrateo: t.prorrateo, margen: t.margen, sinCosto: t.conCosto < t.lineas })}
+    </section>
+    <section class="card"><h2>Margen real por mes ${ayudaInline('c_mes', 'Margen real de cada mes del período (pasá el dedo o el mouse por las barras para ver el detalle).', 'Misma fórmula que el KPI de margen, agrupado por mes de venta (hora Argentina).', 'Importes NOMINALES en ARS: no compares meses sin tener en cuenta la inflación.')}
+      <span class="der dim">nominal ARS</span></h2>
+      <div class="chart" id="chartMes"></div>
+    </section>
+  </div>
+
+  <section class="card"><h2>Top SKUs por margen del período <span class="der"><button class="chip-btn" data-ir="agrupado">Ver todos →</button></span></h2>
+    ${tablaAgrupada(ordenar(agruparPor(ls, (o) => o.sku), { col: 'margen', dir: -1 }).slice(0, 8), 'sku', false)}
+  </section>`;
+}
+
+function cascadaHtml(c) {
+  const base = Math.max(c.lista, c.bruto, 1);
+  const pasos = [
+    { lbl: 'Precio de lista', v: c.lista, tipo: 'total' },
+    { lbl: '− Descuentos', v: -c.descuento, opc: true },
+    { lbl: 'Cobrado (bruto)', v: c.bruto, tipo: 'sub' },
+    { lbl: '− Comisión ML', v: -c.comision },
+    { lbl: '− Envío', v: -c.envio },
+    { lbl: 'Neto ML', v: c.neto, tipo: 'sub' },
+    { lbl: '− Costo mercadería', v: -c.costo },
+    { lbl: '− Brown Flex', v: -c.brown, opc: true },
+    { lbl: '− Embalaje', v: -c.embalaje, opc: true },
+    { lbl: '− Facturas ML', v: -c.prorrateo, opc: true },
+    { lbl: 'Margen real', v: c.margen, tipo: 'fin' },
+  ];
+  let corriente = 0; let html = '';
+  for (const p of pasos) {
+    if (p.opc && !p.v) continue;
+    let izq, ancho, clase;
+    if (p.tipo) { corriente = p.v; izq = Math.min(0, p.v); ancho = Math.abs(p.v); clase = p.tipo === 'fin' ? (p.v >= 0 ? 'fin-pos' : 'fin-neg') : 'sub'; }
+    else { const desde = corriente; corriente += p.v; izq = Math.min(desde, corriente); ancho = Math.abs(p.v); clase = 'res'; }
+    const l = Math.max(0, (izq / base) * 100), w = Math.max(0.4, (ancho / base) * 100);
+    html += `<div class="cas-fila ${p.tipo ? 'total' : ''}"><div class="lbl">${p.lbl}</div>
+      <div class="cas-pista"><div class="cas-bar ${clase}" style="left:${l}%;width:${Math.min(w, 100 - l)}%"></div></div>
+      <div class="val">${plata(p.v)}<span class="pct">${pct(base ? 100 * p.v / base : null)}</span></div></div>`;
+  }
+  if (c.sinCosto) html += `<div class="mute" style="font-size:11.5px;margin-top:6px">Las líneas sin costo suman en lista/bruto/neto pero no en costo ni margen.</div>`;
+  return `<div class="cascada">${html}</div>`;
+}
+
+function montarGraficoMensual() {
+  const el = $('chartMes'); if (!el || !S.ops) return;
+  const meses = ordenar(agruparPor(opsFiltradas(), (o) => String(o.mes).slice(0, 7)), { col: 'clave', dir: 1 });
+  if (!meses.length) { el.innerHTML = estadoVacio('Sin datos'); return; }
+  const W = el.clientWidth || 500, H = el.clientHeight || 240, pl = 54, pr = 8, pt = 10, pb = 26;
+  // escala con marcas "redondas" (1, 2, 2.5, 5 × 10^n)
+  const vMax = Math.max(0, ...meses.map((m) => m.margen)), vMin = Math.min(0, ...meses.map((m) => m.margen));
+  const bruto = ((vMax - vMin) || 1) / 4, mag = Math.pow(10, Math.floor(Math.log10(bruto)));
+  const stepT = [1, 2, 2.5, 5, 10].map((k) => k * mag).find((s) => s >= bruto);
+  const min = Math.floor(vMin / stepT) * stepT, max = Math.ceil(vMax / stepT) * stepT || stepT;
+  const rango = (max - min) || 1;
+  const y = (v) => pt + (max - v) / rango * (H - pt - pb);
+  const paso = (W - pl - pr) / meses.length, bw = Math.max(4, Math.min(46, paso - 6));
+  let grid = '';
+  for (let v = min; v <= max + stepT / 2; v += stepT) { const yy = y(v); grid += `<line x1="${pl}" x2="${W - pr}" y1="${yy}" y2="${yy}"/><text x="${pl - 6}" y="${yy + 3}" text-anchor="end">${abreviar(v)}</text>`; }
+  let barras = '';
+  meses.forEach((m, i) => {
+    const x = pl + i * paso + (paso - bw) / 2, y0 = y(0), y1 = y(m.margen);
+    const top = Math.min(y0, y1), h = Math.max(1, Math.abs(y1 - y0));
+    // barra con extremo de datos redondeado (4px) anclada a la base
+    const r = Math.min(4, h, bw / 2);
+    const d = m.margen >= 0
+      ? `M${x},${y0} V${top + r} Q${x},${top} ${x + r},${top} H${x + bw - r} Q${x + bw},${top} ${x + bw},${top + r} V${y0} Z`
+      : `M${x},${y0} V${top + h - r} Q${x},${top + h} ${x + r},${top + h} H${x + bw - r} Q${x + bw},${top + h} ${x + bw},${top + h - r} V${y0} Z`;
+    barras += `<rect class="hit" data-i="${i}" x="${pl + i * paso}" y="${pt}" width="${paso}" height="${H - pt - pb}"/><path class="bar ${m.margen < 0 ? 'negativa' : ''}" data-b="${i}" d="${d}"/>`;
+    if (meses.length <= 14 || i % Math.ceil(meses.length / 12) === 0) barras += `<text x="${x + bw / 2}" y="${H - 8}" text-anchor="middle">${mesLargo(m.clave)}</text>`;
+  });
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Margen real por mes"><g class="grid">${grid}</g><line x1="${pl}" x2="${W - pr}" y1="${y(0)}" y2="${y(0)}" stroke="rgba(168,158,140,.4)"/>${barras}</svg>`;
+  const tip = $('tip');
+  el.querySelectorAll('.hit').forEach((h) => {
+    const mostrar = (ev) => {
+      const m = meses[Number(h.dataset.i)];
+      el.querySelectorAll('.bar').forEach((b) => b.classList.toggle('hover', b.dataset.b === h.dataset.i));
+      tip.innerHTML = `<div class="t-tit">${mesLargo(m.clave)}</div>
+        <div class="t-row"><span class="dim">Margen</span><span>${plata(m.margen)}</span></div>
+        <div class="t-row"><span class="dim">% s/neto</span><span>${pct(m.margenPctNeto)}</span></div>
+        <div class="t-row"><span class="dim">Neto ML</span><span>${plata(m.neto)}</span></div>
+        <div class="t-row"><span class="dim">Bruto</span><span>${plata(m.bruto)}</span></div>
+        <div class="t-row"><span class="dim">Unidades</span><span>${num(m.unidades)}</span></div>
+        <div class="t-row"><span class="dim">Costo confiable</span><span>${pct(m.coberturaConfiable)}</span></div>`;
+      tip.classList.remove('oculto');
+      const cx = (ev.touches ? ev.touches[0].clientX : ev.clientX), cy = (ev.touches ? ev.touches[0].clientY : ev.clientY);
+      tip.style.left = Math.min(window.innerWidth - tip.offsetWidth - 8, cx + 12) + 'px';
+      tip.style.top = Math.max(8, cy - tip.offsetHeight - 12) + 'px';
+    };
+    h.addEventListener('mousemove', mostrar); h.addEventListener('touchstart', mostrar, { passive: true });
+    h.addEventListener('mouseleave', () => { tip.classList.add('oculto'); el.querySelectorAll('.bar').forEach((b) => b.classList.remove('hover')); });
+  });
+}
+function abreviar(v) { const a = Math.abs(v); const s = v < 0 ? '−' : ''; if (a >= 1e6) return s + '$' + fmtDec.format(a / 1e6) + 'M'; if (a >= 1e3) return s + '$' + fmtARS.format(a / 1e3) + 'k'; return s + '$' + fmtARS.format(a); }
+
+/* ============================================================
+   10. VISTA: OPERACIONES
+   ============================================================ */
+function opsDeOperaciones() {
+  const f = S.opFiltro; const q = f.q.trim().toLowerCase();
+  return opsFiltradas().filter((o) =>
+    (!q || String(o.sku).toLowerCase().includes(q) || String(o.ml_order_id).includes(q) || String(o.titulo || '').toLowerCase().includes(q) || String(o.item_id || '').toLowerCase().includes(q)) &&
+    (f.envio === 'todos' || (f.envio === 'sin' ? !o.tipo_envio : o.tipo_envio === f.envio)) &&
+    (f.sem === 'todos' || o.semaforo === f.sem || (f.sem === 'estimado' && o.costo_completo && !o.costo_confiable)));
+}
+function vistaOperaciones() {
+  const bloq = necesitaOps(); if (bloq) return bloq;
+  const f = S.opFiltro; const filas = ordenar(opsDeOperaciones(), f.orden); const t = agregar(filas);
+  const o = f.orden;
+  const H = (col, l, nm, k) => th(col, l, o, nm, k || '');
+  return `
+  <div class="barra-filtros">
+    <input id="opQ" placeholder="Buscar SKU, orden, título…" value="${esc(f.q)}" style="flex:1;min-width:170px">
+    <select id="opEnvio">${[['todos','Todos los envíos'],['Flex','Flex'],['Colecta','Colecta'],['Full','Full'],['sin','Sin dato de envío']].map(([v,l]) => `<option value="${v}" ${f.envio===v?'selected':''}>${l}</option>`).join('')}</select>
+    <select id="opSem">${[['todos','Todos los semáforos'],['negativo','✕ Negativo'],['bajo','▲ Bajo'],['ok','✓ OK'],['sin_costo','? Sin costo'],['estimado','≈ Costo estimado']].map(([v,l]) => `<option value="${v}" ${f.sem===v?'selected':''}>${l}</option>`).join('')}</select>
+    <button class="btn sec chico" data-accion="csvOps">⬇ CSV</button>
+  </div>
+  <div class="kpis">
+    ${kpi({ label: 'Líneas filtradas', valor: num(t.lineas), sub: `${num(t.unidades)} unidades`, key: 'o_l', que: 'Cantidad de líneas de venta que cumplen los filtros.', calculo: 'Una línea = un SKU dentro de una orden.', fuente: 'v_margen_operacion.' })}
+    ${kpi({ label: 'Margen filtrado', valor: plata(t.margen), sub: `${pct(t.margenPctNeto)} del neto`, clase: t.margen < 0 ? 'neg' : '', key: 'o_m', que: 'Margen real de las líneas filtradas.', calculo: 'Σ margen de cada línea con costo.', fuente: 'v_margen_operacion.' })}
+    ${kpi({ label: 'Neto ML filtrado', valor: plata(t.neto), key: 'o_n', que: 'Lo que ML deja de esas líneas.', calculo: 'Σ net_amount.', fuente: 'ml_ventas_lineas.' })}
+    ${kpi({ label: 'Envío promedio', valor: plata(t.envioProm), key: 'o_e', que: 'Envío promedio por orden de las líneas filtradas.', calculo: 'Σ envío / órdenes.', fuente: 'shipping_cost.' })}
+  </div>
+  ${filas.length ? `<div class="tabla-wrap"><table><thead><tr>
+    ${H('sale_date','Fecha')}${H('sku','SKU')}<th>Publicación</th>${H('tipo_envio','Envío')}${H('units','U',true)}
+    ${H('precio_cobrado_unit','Precio',true)}${H('descuento_pct','Desc.',true)}${H('comision','Comisión',true)}${H('envio','Envío $',true)}${H('neto_ml','Neto ML',true)}
+    ${H('costo_total','Costo',true)}${H('margen','Margen',true)}${H('margen_pct_neto','% neto',true)}${H('semaforo','Estado')}
+  </tr></thead><tbody>
+  ${filas.slice(0, f.limite).map((x) => `<tr class="click" data-op="${esc(x.id)}">
+    <td>${fechaCorta(x.fecha)}</td><td class="mono">${esc(x.sku)}</td><td class="titulo dim" title="${esc(x.titulo)}">${esc(x.titulo || '—')}</td>
+    <td>${x.tipo_envio ? `<span class="badge b-neutro">${esc(x.tipo_envio)}</span>` : '<span class="mute">—</span>'}</td>
+    <td class="num">${num(x.units)}</td><td class="num">${plata(x.precio_cobrado_unit)}</td>
+    <td class="num ${x.descuento_pct > 0 ? '' : 'mute'}">${x.descuento_pct > 0 ? pct(x.descuento_pct) : '—'}</td>
+    <td class="num">${plata(x.comision)}<span class="mute" style="font-size:10.5px"> ${pct(x.comision_pct)}</span></td>
+    <td class="num">${plata(x.envio)}</td><td class="num">${plata(x.neto_ml)}</td><td class="num">${plata(x.costo_total)}</td>
+    <td class="num ${x.margen < 0 ? 'neg' : ''}">${plata(x.margen)}</td><td class="num">${pct(x.margen_pct_neto)}</td>
+    <td>${badgeSem(x.semaforo)}${badgeEst(x)}</td></tr>`).join('')}
+  </tbody></table></div>
+  ${filas.length > f.limite ? `<button class="btn sec chico mas" data-accion="masOps">Mostrar ${Math.min(CONFIG.FILAS_POR_PAGINA, filas.length - f.limite)} más (${num(filas.length - f.limite)} restantes)</button>` : ''}
+  <div class="mute" style="font-size:11.5px;margin-top:8px">Tocá una fila para ver la cascada completa de esa operación.</div>`
+  : estadoVacio('Ninguna operación coincide con los filtros.')}`;
+}
+
+function abrirDetalleOp(id) {
+  const o = (S.ops || []).find((x) => String(x.id) === String(id)); if (!o) return;
+  const cas = cascadaHtml({ lista: o.lista_total, descuento: o.descuento_total, bruto: n(o.bruto), comision: n(o.comision), envio: n(o.envio), neto: n(o.neto_ml),
+    costo: n(o.costo_total), brown: n(o.brown), embalaje: n(o.embalaje), prorrateo: n(o.prorrateo_facturas), margen: o.margen ?? 0, sinCosto: !o.costo_completo });
+  abrirModal(`
+    <h3>${esc(o.sku)} · ${badgeSem(o.semaforo)}${badgeEst(o)}</h3>
+    <div class="dim" style="font-size:12.5px">${esc(o.titulo || '')}</div>
+    <div class="meta-grid">
+      <div><span>Fecha</span>${fechaCorta(o.fecha)} ${String(o.sale_date).slice(11, 16)}</div>
+      <div><span>Orden ML</span><a href="${CONFIG.ML_ORDEN_URL(o.ml_order_id)}" target="_blank" rel="noopener">${esc(o.ml_order_id)} ↗</a></div>
+      <div><span>Publicación</span>${o.item_id ? `<a href="${CONFIG.ML_ITEM_URL(o.item_id)}" target="_blank" rel="noopener">${esc(o.item_id)} ↗</a>` : '—'}</div>
+      <div><span>Tipo publicación</span>${esc({ gold_special: 'Clásica (gold_special)', gold_pro: 'Premium (gold_pro)' }[o.listing_type] || o.listing_type || '—')}</div>
+      <div><span>Envío</span>${esc(o.tipo_envio || 'sin dato')}</div>
+      <div><span>Pago</span>${esc(o.medio_pago || '—')} · ${o.cuotas > 1 ? o.cuotas + ' cuotas' : 'contado'}</div>
+      <div><span>Unidades</span>${num(o.units)}</div>
+      <div><span>Precio lista → cobrado</span>${plata(o.precio_lista_unit)} → ${plata(o.precio_cobrado_unit)}</div>
+      <div><span>Comisión efectiva</span>${pct(o.comision_pct)}</div>
+      <div><span>Costo unitario</span>${plata(o.costo_unit)}</div>
+      <div><span>Fuente del costo</span>${esc(o.costo_fuente || '—')}${o.proveedor ? ' · ' + esc(o.proveedor) : ''}</div>
+      <div><span>Costo de referencia</span>${fechaCorta(o.costo_fecha_ref)}${o.costo_antiguedad_dias != null ? ` (${num(o.costo_antiguedad_dias)} días antes)` : ''}</div>
+      ${o.cupon_ml > 0 ? `<div><span>Cupón (pagado por ML)</span>${plata(o.cupon_ml)}</div>` : ''}
+    </div>
+    <h2 style="font-size:12px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-dim);margin:6px 0 10px">Cascada de la operación</h2>
+    ${cas}
+    <div class="acciones"><span class="dim" style="font-size:12px">Margen: <b class="${o.margen < 0 ? 'neg' : ''}">${plata(o.margen)}</b> · ${pct(o.margen_pct_neto)} del neto · ${pct(o.margen_pct_precio)} del precio</span>
+    <span style="flex:1"></span><button class="btn sec chico" data-accion="calcDesdeOp" data-sku="${esc(o.sku)}">🧮 Precio piso de este SKU</button></div>
+  `);
+}
+
+/* ============================================================
+   11. VISTA: AGRUPADO (SKU · publicación · mes)
+   ============================================================ */
+function vistaAgrupado() {
+  const bloq = necesitaOps(); if (bloq) return bloq;
+  const a = S.agrup; const q = a.q.trim().toLowerCase();
+  const ls = opsFiltradas();
+  const grupos = a.por === 'sku' ? agruparPor(ls, (o) => o.sku)
+    : a.por === 'publicacion' ? agruparPor(ls, (o) => o.item_id || '(sin id)', (o) => `${o.titulo || ''}`)
+    : a.por === 'envio' ? agruparPor(ls, (o) => o.tipo_envio || 'Sin dato')
+    : a.por === 'tipo' ? agruparPor(ls, (o) => ({ gold_special: 'Clásica', gold_pro: 'Premium' }[o.listing_type] || o.listing_type || '—'))
+    : agruparPor(ls, (o) => String(o.mes).slice(0, 7));
+  const filtrados = grupos.filter((g) => !q || String(g.clave).toLowerCase().includes(q) || String(g.label).toLowerCase().includes(q));
+  return `
+  <div class="barra-filtros">
+    <div class="seg" id="segAgrup">${[['sku','Por SKU'],['publicacion','Por publicación'],['mes','Por mes'],['envio','Por tipo de envío'],['tipo','Por tipo de publicación']].map(([v,l]) => `<button data-agrup="${v}" class="${a.por===v?'activo':''}">${l}</button>`).join('')}</div>
+    <input id="agQ" placeholder="Filtrar…" value="${esc(a.q)}" style="flex:1;min-width:140px">
+    <button class="btn sec chico" data-accion="csvAgrup">⬇ CSV</button>
+  </div>
+  ${a.por === 'mes' ? '<div class="aviso warn"><span class="ico">⚠️</span><div>Importes <b>nominales</b>: con inflación, un mes no se compara directo con otro. Mirá sobre todo los <b>porcentajes</b>.</div></div>' : ''}
+  <section class="card">${filtrados.length ? tablaAgrupada(ordenar(filtrados, a.orden), a.por, true) : estadoVacio('Sin resultados.')}</section>`;
+}
+function tablaAgrupada(filas, por, ordenable) {
+  const o = ordenable ? S.agrup.orden : { col: '', dir: 1 };
+  const H = (col, l, nm, ay) => ordenable ? th(col, l, o, nm, ay || '') : `<th class="${nm ? 'num' : ''}">${l}${ay || ''}</th>`;
+  const lblClave = { sku: 'SKU', publicacion: 'Publicación', mes: 'Mes', envio: 'Envío', tipo: 'Tipo' }[por];
+  return `<div class="tabla-wrap"><table><thead><tr>
+    ${H('clave', lblClave)}${por === 'publicacion' ? '<th>Título</th>' : ''}
+    ${H('unidades','Unid.',true)}${H('precioProm','Precio prom.',true, ayudaInline('t_pp','Precio cobrado promedio por unidad.','Bruto / unidades.','Ventas ML.'))}
+    ${H('bruto','Bruto',true)}${H('comisionPct','Comisión %',true)}${H('envioProm','Envío/orden',true)}${H('neto','Neto ML',true)}
+    ${H('costo','Costo',true)}${H('margen','Margen',true)}${H('margenPctNeto','% neto',true, ayudaInline('t_mpn','Margen sobre lo que deja ML.','Margen / neto ML (solo líneas con costo).','v_margen_operacion.'))}
+    ${H('margenPctPrecio','% precio',true, ayudaInline('t_mpp','Margen sobre el precio cobrado.','Margen / bruto (solo líneas con costo).','v_margen_operacion.'))}
+    ${H('margenPorUnidad','Margen/u',true)}${H('neg','Alertas',true)}
+  </tr></thead><tbody>
+  ${filas.map((g) => `<tr>
+    <td class="mono">${por === 'mes' ? mesLargo(g.clave) : por === 'publicacion' && g.clave.startsWith('MLA') ? `<a href="${CONFIG.ML_ITEM_URL(g.clave)}" target="_blank" rel="noopener">${esc(g.clave)}</a>` : esc(g.clave)}</td>
+    ${por === 'publicacion' ? `<td class="titulo dim" title="${esc(g.label)}">${esc(g.label)}</td>` : ''}
+    <td class="num">${num(g.unidades)}</td><td class="num">${plata(g.precioProm)}</td><td class="num">${plata(g.bruto)}</td>
+    <td class="num">${pct(g.comisionPct)}</td><td class="num">${plata(g.envioProm)}</td><td class="num">${plata(g.neto)}</td>
+    <td class="num">${g.conCosto ? plata(g.costo) : '—'}</td><td class="num ${g.margen < 0 ? 'neg' : ''}">${g.conCosto ? plata(g.margen) : '—'}</td>
+    <td class="num ${g.margenPctNeto !== null && g.margenPctNeto < n(S.config.umbral_margen_pct || 15) ? 'neg' : ''}">${pct(g.margenPctNeto)}</td><td class="num">${pct(g.margenPctPrecio)}</td>
+    <td class="num">${plata(g.margenPorUnidad)}</td>
+    <td class="num">${g.neg ? `<span class="neg">${g.neg}✕</span> ` : ''}${g.bajo ? `<span style="color:var(--warn)">${g.bajo}▲</span>` : ''}${!g.neg && !g.bajo ? '<span class="mute">—</span>' : ''}${g.lineas > g.confiables ? ` <span class="badge b-est" title="${g.lineas - g.confiables} líneas con costo estimado">≈${g.lineas - g.confiables}</span>` : ''}</td>
+  </tr>`).join('')}</tbody></table></div>`;
+}
+
+/* ============================================================
+   12. VISTA: ALERTAS
+   ============================================================ */
+function vistaAlertas() {
+  const bloq = necesitaOps(); if (bloq) return bloq;
+  const umbral = n(S.config.umbral_margen_pct || 15);
+  const base = opsFiltradas().filter((o) => (o.semaforo === 'negativo' || o.semaforo === 'bajo') && (S.alertas.incluirEstimados || o.costo_confiable));
+  const porSku = ordenar(agruparPor(base, (o) => o.sku), { col: 'margen', dir: 1 });
+  const sinCosto = agruparPor(opsFiltradas().filter((o) => o.semaforo === 'sin_costo'), (o) => o.sku);
+  const tNeg = agregar(base.filter((o) => o.semaforo === 'negativo'));
+  return `
+  <div class="barra-filtros"><label class="chk"><input type="checkbox" id="chkAlertEst" ${S.alertas.incluirEstimados ? 'checked' : ''}> Incluir operaciones con costo estimado</label>
+    <span class="sep"></span><span class="dim" style="font-size:12px">Umbral actual: margen &lt; ${pct(umbral)} del neto (editable en ⚙️)</span></div>
+  <div class="kpis">
+    ${kpi({ label: 'Líneas en alerta', valor: num(base.length), sub: `${num(porSku.length)} SKUs`, key: 'a_l', que: 'Ventas con margen negativo o por debajo del umbral.', calculo: `Negativo: margen < 0 · Bajo: margen < ${umbral}% del neto.`, fuente: 'Semáforo de v_margen_operacion.' })}
+    ${kpi({ label: 'Pérdida en negativas', valor: plata(tNeg.margen), clase: 'neg', sub: `${num(tNeg.lineas)} líneas`, key: 'a_p', que: 'Plata perdida en las ventas que dieron margen negativo.', calculo: 'Σ margen de las líneas con margen < 0.', fuente: 'v_margen_operacion.' })}
+    ${kpi({ label: 'SKUs sin costo', valor: num(sinCosto.length), sub: sinCosto.map((s) => esc(s.clave)).slice(0, 4).join(', '), key: 'a_s', que: 'SKUs vendidos sin ningún costo cargado (no se puede medir su margen).', calculo: 'Sin compras con precio, sin costo manual y sin maestro.', fuente: 'Cargalos en 💲 Costos.' })}
+  </div>
+  <section class="card"><h2>SKUs en alerta (peor primero)</h2>
+  ${porSku.length ? `<div class="tabla-wrap"><table><thead><tr><th>SKU</th><th class="num">Líneas</th><th class="num">Unid.</th><th class="num">Precio prom.</th><th class="num">Comisión %</th><th class="num">Envío/orden</th><th class="num">Costo</th><th class="num">Margen</th><th class="num">% neto</th><th>Causa probable</th><th></th></tr></thead><tbody>
+    ${porSku.map((g) => `<tr><td class="mono">${esc(g.clave)}</td><td class="num">${g.lineas}</td><td class="num">${g.unidades}</td><td class="num">${plata(g.precioProm)}</td>
+      <td class="num">${pct(g.comisionPct)}</td><td class="num">${plata(g.envioProm)}</td><td class="num">${plata(g.costo)}</td><td class="num ${g.margen < 0 ? 'neg' : ''}">${plata(g.margen)}</td>
+      <td class="num">${pct(g.margenPctNeto)}</td><td class="dim" style="white-space:normal;min-width:180px">${causaProbable(g)}</td>
+      <td><button class="btn sec chico" data-accion="calcDesdeOp" data-sku="${esc(g.clave)}">🧮</button></td></tr>`).join('')}
+  </tbody></table></div>` : estadoVacio('Sin alertas en el período 🎉')}
+  </section>`;
+}
+function causaProbable(g) {
+  const c = [];
+  if (g.bruto && g.envio / g.bruto > 0.25) c.push(`envío = ${pct(100 * g.envio / g.bruto)} del precio`);
+  if (g.comisionPct > 25) c.push(`comisión alta (${pct(g.comisionPct)}: Premium/cuotas o costo fijo)`);
+  if (g.netoConCosto && g.costo / g.netoConCosto > 0.85) c.push('costo casi igual al neto: precio bajo');
+  if (g.lista && g.descuento / g.lista > 0.1) c.push(`descuento ${pct(100 * g.descuento / g.lista)}`);
+  return c.length ? c.join(' · ') : 'revisar precio vs costo';
+}
+
+/* ============================================================
+   13. VISTA: COSTOS (vigentes · carga masiva · manuales · reglas)
+   ============================================================ */
+function vistaCostos() {
+  if (S.costosCargando) return estadoCarga('Calculando costos vigentes…', S.costosInicio);
+  if (S.costosError) return estadoError(S.costosError, 'recargarCostos');
+  if (!S.costos) return estadoCarga();
+  const { vigentes = [], manuales = [], reglas = [], proveedores = [] } = S.costos;
+  const v = S.costosVista; const q = v.q.trim().toLowerCase();
+  const lista = vigentes.map((x) => ({ ...x, costo: x.costo === null ? null : Number(x.costo), costo_maestro: x.costo_maestro === null ? null : Number(x.costo_maestro), dif_vs_maestro_pct: x.dif_vs_maestro_pct === null ? null : Number(x.dif_vs_maestro_pct), antiguedad_dias: x.antiguedad_dias === null ? null : Number(x.antiguedad_dias) }))
+    .filter((x) => (!q || String(x.sku).toLowerCase().includes(q) || String(x.proveedor || '').toLowerCase().includes(q)) && (!v.soloDif || Math.abs(x.dif_vs_maestro_pct || 0) >= 3));
+  const conDif = vigentes.filter((x) => Math.abs(Number(x.dif_vs_maestro_pct || 0)) >= 3).length;
+  const viejos = vigentes.filter((x) => !x.es_kit && Number(x.antiguedad_dias) > n(S.config.costo_max_antiguedad_dias || 120)).length;
+  const provNombre = Object.fromEntries(proveedores.map((p) => [p.id, p.nombre]));
+  const c = S.carga;
+  return `
+  <div class="kpis">
+    ${kpi({ label: 'SKUs con costo', valor: num(vigentes.filter((x) => x.costo !== null).length), sub: `de ${num(vigentes.length)}`, key: 'c_n', que: 'SKUs (base y kits) con un costo calculable hoy.', calculo: 'Kits: todos sus componentes deben tener costo.', fuente: 'v_margen_costos_vigentes.' })}
+    ${kpi({ label: 'Difieren del maestro', valor: num(conDif), sub: '±3% o más', key: 'c_d', que: 'SKUs cuyo costo real difiere del costo cargado en el Excel maestro.', calculo: '(costo real − costo maestro) / costo maestro.', fuente: 'productos_costo vs compras/manual.' })}
+    ${kpi({ label: 'Costo viejo', valor: num(viejos), sub: `> ${n(S.config.costo_max_antiguedad_dias || 120)} días`, key: 'c_v', que: 'SKUs base cuyo último costo con precio tiene muchos días.', calculo: 'Hoy − fecha de la compra/costo manual usado.', fuente: 'Cargá la lista nueva del proveedor abajo.' })}
+    ${kpi({ label: 'Costos manuales', valor: num(manuales.length), key: 'c_m', que: 'Costos cargados a mano con fecha de vigencia.', calculo: 'Pisan a la última compra desde su fecha, hasta que entre una compra más nueva.', fuente: 'costos_sku_manual.' })}
+  </div>
+
+  <section class="card"><h2>Cargar lista / costos nuevos ${ayudaInline('c_carga','Pegá SKU y valor (uno por línea). Sirve para cargar la lista nueva de un proveedor sin esperar a la próxima compra.','Modo lista: costo = lista × (1+IVA) × (1−desc. propio) según la regla del proveedor (si el proveedor no tiene regla de lista, se toma tal cual). Modo costo final: se usa tal cual.','Se guarda en costos_sku_manual con la fecha de vigencia.')}</h2>
+    ${!S.puedeEditar ? '<div class="aviso warn"><span class="ico">🔒</span><div>Tu usuario no tiene permiso para editar costos.</div></div>' : ''}
+    <div class="form-grid">
+      <div class="campo"><label>Qué vas a pegar</label><select id="cgModo"><option value="lista" ${c.modo==='lista'?'selected':''}>Precio de lista s/IVA (aplica regla)</option><option value="final" ${c.modo==='final'?'selected':''}>Costo final (tal cual)</option></select></div>
+      <div class="campo"><label>Vigente desde</label><input type="date" id="cgVig" value="${c.vigencia || hoyAR()}"></div>
+      <div class="campo"><label>Proveedor (opcional)</label><select id="cgProv"><option value="">El de la última compra de cada SKU</option>${proveedores.filter((p) => p.activo !== false).map((p) => `<option value="${p.id}" ${c.proveedor===p.id?'selected':''}>${esc(p.nombre)}</option>`).join('')}</select></div>
+    </div>
+    <div class="campo" style="margin-top:10px"><label>SKU y valor — uno por línea (tab, punto y coma o espacio)</label>
+      <textarea id="cgTexto" rows="5" placeholder="49	3317&#10;27	4600,50&#10;61;16900">${esc(c.texto)}</textarea></div>
+    <div class="acciones"><button class="btn sec" data-accion="cgPreview">Previsualizar</button>
+      ${c.preview ? `<button class="btn" data-accion="cgGuardar" ${!S.puedeEditar || c.corriendo || !c.preview.filter((p) => p.ok).length ? 'disabled' : ''}>Guardar ${c.preview.filter((p) => p.ok).length} costos</button>` : ''}
+      <span id="cgProgreso" class="progreso"></span></div>
+    ${c.preview ? previewCargaHtml(c.preview) : ''}
+  </section>
+
+  <section class="card"><h2>Costo vigente hoy por SKU <span class="der"><button class="chip-btn" data-accion="recargarCostos">↻</button></span></h2>
+    <div class="barra-filtros" style="margin-bottom:10px"><input id="cvQ" placeholder="Buscar SKU o proveedor…" value="${esc(v.q)}" style="flex:1;min-width:150px">
+      <label class="chk"><input type="checkbox" id="cvDif" ${v.soloDif ? 'checked' : ''}> Solo los que difieren del maestro</label></div>
+    <div class="tabla-wrap" style="max-height:520px;overflow:auto"><table><thead><tr>
+      ${th('sku','SKU',v.orden)}${th('proveedor','Proveedor',v.orden)}${th('costo','Costo real hoy',v.orden,true)}${th('fuente','Fuente',v.orden)}
+      ${th('antiguedad_dias','Antigüedad',v.orden,true)}${th('costo_maestro','Maestro',v.orden,true)}${th('dif_vs_maestro_pct','Dif. vs maestro',v.orden,true)}
+    </tr></thead><tbody>${ordenar(lista, v.orden).map((x) => `<tr>
+      <td class="mono">${esc(x.sku)}${x.es_kit ? ' <span class="badge b-neutro">kit</span>' : ''}</td><td class="dim">${esc(x.proveedor || '—')}</td>
+      <td class="num">${plata(x.costo)}</td><td>${esc(x.fuente || '—')}</td>
+      <td class="num ${x.antiguedad_dias > n(S.config.costo_max_antiguedad_dias || 120) ? 'neg' : ''}">${x.antiguedad_dias === null ? '—' : num(x.antiguedad_dias) + ' d'}</td>
+      <td class="num">${plata(x.costo_maestro)}</td><td class="num ${Math.abs(x.dif_vs_maestro_pct || 0) >= 3 ? (x.dif_vs_maestro_pct > 0 ? 'neg' : 'pos') : 'mute'}">${x.dif_vs_maestro_pct === null ? '—' : (x.dif_vs_maestro_pct > 0 ? '+' : '') + pct(x.dif_vs_maestro_pct)}</td>
+    </tr>`).join('')}</tbody></table></div>
+  </section>
+
+  <div class="grid2">
+    <section class="card"><h2>Costos manuales cargados</h2>
+      ${manuales.length ? `<div class="tabla-wrap" style="max-height:360px;overflow:auto"><table><thead><tr><th>SKU</th><th>Desde</th><th class="num">Lista</th><th class="num">Costo final</th><th>Proveedor</th><th></th></tr></thead><tbody>
+      ${manuales.map((m) => `<tr><td class="mono">${esc(m.sku)}</td><td>${fechaCorta(m.vigente_desde)}</td><td class="num">${plata(m.precio_lista)}</td><td class="num">${plata(m.costo_final)}</td>
+        <td class="dim">${esc(provNombre[m.proveedor_id] || 'últ. compra')}</td>
+        <td>${S.puedeEditar ? `<button class="btn sec chico" data-accion="borrarManual" data-id="${m.id}" title="Borrar">🗑</button>` : ''}</td></tr>`).join('')}
+      </tbody></table></div>` : estadoVacio('Todavía no cargaste costos manuales.')}
+    </section>
+    <section class="card"><h2>Reglas de costo por proveedor ${ayudaInline('c_reg','Cómo se convierte el precio de una compra en costo real.','“Lista × IVA × (1−desc)”: para proveedores que facturan lista + IVA con descuento propio (BBA: 21% y 4%, SIN el 5% de pronto pago). “Precio final”: se usa el precio final que ya trae la planilla de compras.','costo_reglas_proveedor. Proveedor sin regla = precio final.')}</h2>
+      ${reglas.length ? `<div class="tabla-wrap"><table><thead><tr><th>Proveedor</th><th>Método</th><th class="num">IVA</th><th class="num">Desc. propio</th></tr></thead><tbody>
+        ${reglas.map((r) => `<tr><td>${esc(provNombre[r.proveedor_id] || r.proveedor_id)}</td><td>${r.metodo === 'lista_iva_desc' ? 'Lista × IVA × (1−desc)' : 'Precio final'}</td><td class="num">${pct(100 * r.iva)}</td><td class="num">${pct(100 * r.desc_propio)}</td></tr>`).join('')}
+      </tbody></table></div>` : ''}
+      ${S.puedeEditar ? `<div class="form-grid" style="margin-top:12px">
+        <div class="campo"><label>Proveedor</label><select id="rgProv">${proveedores.map((p) => `<option value="${p.id}">${esc(p.nombre)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Método</label><select id="rgMetodo"><option value="lista_iva_desc">Lista × IVA × (1−desc)</option><option value="precio_final">Precio final de compras</option></select></div>
+        <div class="campo"><label>IVA %</label><input id="rgIva" type="number" step="0.1" value="21"></div>
+        <div class="campo"><label>Desc. propio %</label><input id="rgDesc" type="number" step="0.1" value="0"></div>
+      </div><div class="acciones"><button class="btn sec" data-accion="guardarRegla">Guardar regla</button></div>` : ''}
+    </section>
+  </div>`;
+}
+
+function prepararPreviewCarga() {
+  const c = S.carga; const { vigentes = [], reglas = [], proveedores = [] } = S.costos || {};
+  const porSku = Object.fromEntries(vigentes.map((x) => [String(x.sku), x]));
+  const provPorNombre = Object.fromEntries(proveedores.map((p) => [p.nombre, p.id]));
+  const reglaPorProv = Object.fromEntries(reglas.map((r) => [r.proveedor_id, r]));
+  const vistos = new Set();
+  return c.texto.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map((linea, i) => {
+    const partes = linea.split(/[\t;]+|\s{1,}/).filter(Boolean);
+    const sku = (partes[0] || '').trim(); const valor = parsearNumero(partes.slice(1).join(''));
+    const v = porSku[sku];
+    const fila = { linea: i + 1, sku, valor, ok: true, nota: '' };
+    if (!sku) return { ...fila, ok: false, nota: 'sin SKU' };
+    if (valor === null || isNaN(valor) || valor <= 0) return { ...fila, ok: false, nota: 'valor inválido' };
+    if (vistos.has(sku)) return { ...fila, ok: false, nota: 'SKU repetido en el pegado' };
+    vistos.add(sku);
+    if (v && v.es_kit) return { ...fila, ok: false, nota: 'es un kit: cargá el costo de sus componentes' };
+    const provId = c.proveedor || (v && v.proveedor ? provPorNombre[v.proveedor] : null);
+    const r = provId ? reglaPorProv[provId] : null;
+    // Mismo criterio que margen_costo_base(): sin regla de lista → el valor se toma tal cual
+    const conRegla = c.modo === 'lista' && r && r.metodo === 'lista_iva_desc';
+    const f4 = (x) => Number(x).toLocaleString('es-AR', { maximumFractionDigits: 4 });
+    fila.costo = conRegla ? valor * (1 + Number(r.iva)) * (1 - Number(r.desc_propio)) : valor;
+    fila.formula = c.modo === 'final' ? 'tal cual' : conRegla ? `× ${f4(1 + Number(r.iva))} × ${f4(1 - Number(r.desc_propio))}` : 'tal cual (proveedor sin regla de lista)';
+    fila.actual = v && v.costo !== null ? Number(v.costo) : null;
+    fila.dif = fila.actual ? 100 * (fila.costo - fila.actual) / fila.actual : null;
+    if (!v) fila.nota = 'SKU nuevo (no figura en compras ni maestro)';
+    else if (fila.dif !== null && Math.abs(fila.dif) >= 40) fila.nota = '⚠️ cambio grande: revisá el valor';
+    return fila;
+  });
+}
+function previewCargaHtml(p) {
+  return `<div class="tabla-wrap" style="margin-top:12px;max-height:340px;overflow:auto"><table><thead><tr><th>#</th><th>SKU</th><th class="num">Valor pegado</th><th>Fórmula</th><th class="num">Costo resultante</th><th class="num">Costo actual</th><th class="num">Dif.</th><th>Nota</th></tr></thead><tbody>
+  ${p.map((f) => `<tr style="${f.ok ? '' : 'opacity:.65'}"><td class="mute">${f.linea}</td><td class="mono">${esc(f.sku)}</td><td class="num">${f.valor && !isNaN(f.valor) ? plata(f.valor) : '—'}</td><td class="dim">${esc(f.formula || '')}</td>
+    <td class="num">${f.ok ? plata(f.costo) : '—'}</td><td class="num">${plata(f.actual)}</td><td class="num">${f.dif != null ? (f.dif > 0 ? '+' : '') + pct(f.dif) : '—'}</td>
+    <td class="${f.ok ? 'dim' : 'neg'}">${f.ok ? esc(f.nota) : '✕ ' + esc(f.nota)}</td></tr>`).join('')}
+  </tbody></table></div>`;
+}
+async function guardarCargaCostos() {
+  const c = S.carga; if (!c.preview || c.corriendo) return;
+  const items = c.preview.filter((f) => f.ok).map((f) => ({
+    sku: f.sku, vigente_desde: c.vigencia || hoyAR(), proveedor_id: c.proveedor || null,
+    precio_lista: c.modo === 'lista' ? f.valor : null, costo_final: c.modo === 'final' ? f.valor : null, nota: 'carga masiva desde app márgenes',
+  }));
+  if (!items.length) return;
+  c.corriendo = true; render();
+  const tandas = []; for (let i = 0; i < items.length; i += CONFIG.TANDA_COSTOS) tandas.push(items.slice(i, i + CONFIG.TANDA_COSTOS));
+  const t0 = Date.now(); let hechos = 0; const errores = [];
+  const prog = (txt) => { const el = $('cgProgreso'); if (el) el.innerHTML = txt; };
+  const estimadoIni = Math.max(1, Math.round(tandas.length * 1.2));
+  prog(`Guardando 0/${items.length} · estimado ~${estimadoIni} s<div class="barra"><div style="width:0%"></div></div>`);
+  for (const t of tandas) {
+    try { const r = await api('costos_manual_guardar', { items: t }); (r.errores || []).forEach((e) => errores.push(e)); }
+    catch (e) { t.forEach((x) => errores.push({ sku: x.sku, error: e.message })); }
+    hechos += t.length;
+    const ritmo = (Date.now() - t0) / hechos; const resta = Math.round((items.length - hechos) * ritmo / 1000);
+    prog(`Guardando ${hechos}/${items.length} · resta ~${resta} s<div class="barra"><div style="width:${100 * hechos / items.length}%"></div></div>`);
+  }
+  c.corriendo = false;
+  if (errores.length) toast(`Guardado con ${errores.length} error(es): ${errores.slice(0, 3).map((e) => e.sku + ' ' + e.error).join(' · ')}`, 'err');
+  else { toast(`✓ ${items.length} costos guardados`, 'ok'); c.preview = null; c.texto = ''; }
+  S.ops = null; S.stock = null; // el margen y el stock cambian con los costos nuevos
+  await cargarCostos(true);
+}
+
+/* ============================================================
+   14. VISTA: STOCK VALORIZADO
+   ============================================================ */
+function vistaStock() {
+  if (S.stockCargando) return estadoCarga('Valorizando stock…', S.stockInicio);
+  if (S.stockError) return estadoError(S.stockError, 'recargarStock');
+  if (!S.stock) return estadoCarga();
+  const sv = S.stockVista; const lento = (f) => f.unidades_60d === 0 || (f.dias_cobertura !== null && f.dias_cobertura > CONFIG.DIAS_STOCK_LENTO);
+  const filas = S.stock.filter((f) => !sv.soloLento || lento(f));
+  const tot = S.stock.reduce((a, f) => ({ valor: a.valor + n(f.valor), maestro: a.maestro + n(f.valor_maestro), u: a.u + n(f.total), full: a.full + n(f.en_full) * n(f.costo_unit), lento: a.lento + (lento(f) ? n(f.valor) : 0), sinCosto: a.sinCosto + (f.costo_unit === null ? 1 : 0) }), { valor: 0, maestro: 0, u: 0, full: 0, lento: 0, sinCosto: 0 });
+  return `
+  <div class="kpis">
+    ${kpi({ label: 'Stock a costo real', valor: plata(tot.valor), sub: `${num(tot.u)} unidades`, destacado: true, key: 's_v', que: 'Plata inmovilizada en mercadería (propio + Full), al costo real de hoy.', calculo: 'Σ (stock propio + stock en Full) × costo real hoy. Kits en Full se abren en componentes.', fuente: 'stock_sku + stock_full × costo vigente (compras/manual/maestro).' })}
+    ${kpi({ label: 'Con costo del maestro', valor: plata(tot.maestro), sub: `dif. ${plata(tot.valor - tot.maestro, true)}`, key: 's_m', que: 'El mismo stock valuado con el costo del Excel maestro.', calculo: 'Σ unidades × productos_costo.', fuente: 'Sirve para ver cuánto subvalúa el maestro.' })}
+    ${kpi({ label: 'En Full', valor: plata(tot.full), key: 's_f', que: 'Valor del stock que está en el depósito de ML.', calculo: 'Σ unidades en Full × costo real.', fuente: 'stock_full.' })}
+    ${kpi({ label: 'Stock lento', valor: plata(tot.lento), sub: `sin ventas 60 d o cobertura > ${CONFIG.DIAS_STOCK_LENTO} d`, clase: tot.lento ? 'neg' : '', key: 's_l', que: 'Mercadería que rota poco: plata parada.', calculo: `Sin ventas en 60 días o stock / (ventas 60d / 60) > ${CONFIG.DIAS_STOCK_LENTO} días.`, fuente: 'Ventas ML (kits abiertos en componentes).' })}
+  </div>
+  <div class="barra-filtros"><label class="chk"><input type="checkbox" id="chkLento" ${sv.soloLento ? 'checked' : ''}> Solo stock lento</label><span class="sep"></span>
+    <button class="btn sec chico" data-accion="csvStock">⬇ CSV</button><button class="chip-btn" data-accion="recargarStock">↻</button></div>
+  <section class="card">${filas.length ? `<div class="tabla-wrap"><table><thead><tr>
+    ${th('sku','SKU',sv.orden)}${th('proveedor','Proveedor',sv.orden)}${th('propio','Propio',sv.orden,true)}${th('en_full','Full',sv.orden,true)}
+    ${th('costo_unit','Costo real',sv.orden,true)}${th('valor','Valor',sv.orden,true)}${th('costo_maestro','Maestro',sv.orden,true)}
+    ${th('unidades_60d','Vend. 60d',sv.orden,true)}${th('dias_cobertura','Cobertura',sv.orden,true, ayudaInline('s_cob','Cuántos días dura el stock al ritmo de venta actual.','Stock total / (unidades vendidas en 60 días / 60).','Ventas ML de los últimos 60 días.'))}${th('ultima_venta','Última venta',sv.orden)}
+  </tr></thead><tbody>${ordenar(filas, sv.orden).map((f) => `<tr>
+    <td class="mono">${esc(f.sku)}</td><td class="dim">${esc(f.proveedor || '—')}</td><td class="num">${num(f.propio)}</td><td class="num">${f.en_full ? num(f.en_full) : '<span class="mute">—</span>'}</td>
+    <td class="num">${plata(f.costo_unit)}</td><td class="num">${plata(f.valor)}</td><td class="num mute">${plata(f.costo_maestro)}</td>
+    <td class="num">${num(f.unidades_60d)}</td><td class="num ${lento(f) ? 'neg' : ''}">${f.dias_cobertura === null ? 'sin ventas' : num(f.dias_cobertura) + ' d'}</td><td>${fechaCorta(f.ultima_venta)}</td>
+  </tr>`).join('')}</tbody></table></div>` : estadoVacio('Sin stock para mostrar.')}</section>`;
+}
+
+/* ============================================================
+   15. VISTA: CALCULADORA DE PRECIO PISO
+   ============================================================ */
+const CALC = { sku: '', costo: '', comision: 14, fijo: 0, envio: '', otros: '', modo: 'pct_neto', objetivo: 30, promo: 0 };
+function vistaCalculadora() {
+  const skus = S.ops ? [...new Set(S.ops.map((o) => o.sku))].sort((a, b) => String(a).localeCompare(String(b), 'es', { numeric: true })) : [];
+  return `
+  <div class="grid2">
+  <section class="card"><h2>Datos ${ayudaInline('p_d','Completá a mano o elegí un SKU para precargar sus promedios.','Al elegir SKU: costo real de hoy, comisión % y envío promedio de sus ventas del período elegido arriba.','Ventas ML + costos vigentes.')}</h2>
+    <div class="form-grid">
+      <div class="campo"><label>SKU (opcional)</label><input id="ccSku" list="ccSkus" value="${esc(CALC.sku)}" placeholder="Ej: 238"><datalist id="ccSkus">${skus.map((s) => `<option value="${esc(s)}">`).join('')}</datalist><div class="hint">Precarga costo, comisión y envío.</div></div>
+      <div class="campo"><label>Costo de mercadería $</label><input id="ccCosto" type="number" min="0" value="${esc(CALC.costo)}"></div>
+      <div class="campo"><label>Comisión ML %</label><input id="ccCom" type="number" step="0.1" min="0" max="80" value="${esc(CALC.comision)}"><div class="hint">Clásica ~14%. Premium/cuotas, más.</div></div>
+      <div class="campo"><label>Cargo fijo ML $</label><input id="ccFijo" type="number" min="0" value="${esc(CALC.fijo)}"><div class="hint">Costo fijo por unidad en precios bajos.</div></div>
+      <div class="campo"><label>Envío a cargo $</label><input id="ccEnv" type="number" min="0" value="${esc(CALC.envio)}"><div class="hint">Promedio esperado por venta.</div></div>
+      <div class="campo"><label>Otros por venta $</label><input id="ccOtros" type="number" min="0" value="${esc(CALC.otros)}"><div class="hint">Brown, embalaje, prorrateo facturas.</div></div>
+      <div class="campo"><label>Objetivo</label><select id="ccModo">
+        <option value="pct_neto" ${CALC.modo==='pct_neto'?'selected':''}>% de margen sobre el neto</option>
+        <option value="pct_precio" ${CALC.modo==='pct_precio'?'selected':''}>% de margen sobre el precio</option>
+        <option value="pesos" ${CALC.modo==='pesos'?'selected':''}>$ de margen por venta</option></select></div>
+      <div class="campo"><label>Valor objetivo</label><input id="ccObj" type="number" step="0.1" value="${esc(CALC.objetivo)}"></div>
+      <div class="campo"><label>Descuento de promo a aplicar %</label><input id="ccPromo" type="number" step="0.1" min="0" max="90" value="${esc(CALC.promo)}"><div class="hint">Para sugerir el precio de lista.</div></div>
+    </div>
+  </section>
+  <section class="card"><h2>Resultado</h2><div id="ccRes"></div></section>
+  </div>`;
+}
+function leerCalc() {
+  const g = (id) => { const el = $(id); return el ? el.value : ''; };
+  Object.assign(CALC, { sku: g('ccSku'), costo: g('ccCosto'), comision: g('ccCom'), fijo: g('ccFijo'), envio: g('ccEnv'), otros: g('ccOtros'), modo: g('ccModo'), objetivo: g('ccObj'), promo: g('ccPromo') });
+}
+function precargarCalcSku(sku) {
+  CALC.sku = sku;
+  const ls = (S.ops || []).filter((o) => String(o.sku) === String(sku));
+  if (ls.length) {
+    const t = agregar(ls); const ult = ls.reduce((a, o) => (!a || o.sale_date > a.sale_date ? o : a), null);
+    CALC.costo = ult && ult.costo_unit !== null ? Math.round(ult.costo_unit) : CALC.costo;
+    CALC.comision = t.comisionPct !== null ? Math.round(t.comisionPct * 10) / 10 : CALC.comision;
+    CALC.envio = t.envioProm !== null ? Math.round(t.envioProm) : CALC.envio;
+    CALC.fijo = 0;
+    // otros por venta = lo que hoy ya descuenta la vista en promedio (Brown + embalaje + facturas)
+    const otros = t.conCosto ? (t.brown + t.embalaje + t.prorrateo) / t.conCosto : 0;
+    CALC.otros = otros ? Math.round(otros) : '';
+    toast(`Precargado ${sku}: ${ls.length} ventas del período`, 'ok');
+  } else toast('Ese SKU no tiene ventas en el período elegido: completá a mano.', 'err');
+}
+function calcularPrecioPiso() {
+  const el = $('ccRes'); if (!el) return;
+  const costo = n(CALC.costo), c = n(CALC.comision) / 100, fijo = n(CALC.fijo), env = n(CALC.envio), otros = n(CALC.otros), obj = n(CALC.objetivo), promo = n(CALC.promo) / 100;
+  if (!(costo > 0)) { el.innerHTML = estadoVacio('Cargá al menos el costo de mercadería.'); return; }
+  if (c >= 0.95) { el.innerHTML = estadoError('La comisión no puede ser ≥ 95%.'); return; }
+  const fijos = costo + otros; // lo que sale después del neto
+  let P;
+  if (CALC.modo === 'pesos') P = (fijos + obj + fijo + env) / (1 - c);
+  else if (CALC.modo === 'pct_precio') { const m = obj / 100; if (1 - c - m <= 0) { el.innerHTML = estadoError('Objetivo imposible: comisión + margen ≥ 100% del precio.'); return; } P = (fijos + fijo + env) / (1 - c - m); }
+  else { const m = obj / 100; if (m >= 1) { el.innerHTML = estadoError('El margen sobre el neto tiene que ser < 100%.'); return; } P = ((fijos / (1 - m)) + fijo + env) / (1 - c); }
+  const Peq = (fijos + fijo + env) / (1 - c);
+  const comision = P * c + fijo, neto = P - comision - env, margen = neto - costo - otros;
+  const lista = promo > 0 && promo < 1 ? P / (1 - promo) : null;
+  el.innerHTML = `
+    <div class="dim" style="font-size:12px">Precio cobrado mínimo ${ayudaInline('p_r','Precio al que tiene que quedar la venta (después de la promo) para cumplir el objetivo.','Se despeja de: neto = P × (1 − comisión%) − cargo fijo − envío; margen = neto − costo − otros.','Valores cargados a la izquierda.')}</div>
+    <div class="calc-res">${plata(Math.ceil(P))}</div>
+    ${lista ? `<div style="margin-top:4px">Precio de lista sugerido con ${pct(promo * 100)} de promo: <b class="mono">${plata(Math.ceil(lista))}</b></div>` : ''}
+    <div class="dim" style="margin:4px 0 14px">Equilibrio (margen $0): <b class="mono">${plata(Math.ceil(Peq))}</b> ${ayudaInline('p_eq','Precio por debajo del cual perdés plata en cada venta.','(costo + otros + cargo fijo + envío) / (1 − comisión%).','Valores cargados.')}</div>
+    ${cascadaHtml({ lista: lista || P, descuento: lista ? lista - P : 0, bruto: P, comision, envio: env, neto, costo, brown: 0, embalaje: otros, prorrateo: 0, margen })}
+    <div class="mute" style="font-size:11.5px;margin-top:10px">Ojo: el envío a cargo de ML cambia según el precio (umbral de envío gratis) y la comisión según el tipo de publicación y las cuotas. Precios sin redondear a tu escala comercial. No modifica nada en ML.</div>`;
+}
+
+/* ============================================================
+   16. VISTA: AJUSTES Y FACTURAS ML
+   ============================================================ */
+function vistaAjustes() {
+  const c = S.config || {}; const ro = !S.puedeEditar ? 'disabled' : '';
+  return `
+  ${!S.puedeEditar ? '<div class="aviso warn"><span class="ico">🔒</span><div>Tu usuario puede ver pero no editar los ajustes.</div></div>' : ''}
+  <section class="card"><h2>Parámetros del cálculo</h2>
+    <div class="form-grid">
+      <div class="campo"><label>Umbral de alerta (% s/neto)</label><input id="ajUmbral" type="number" step="0.5" value="${esc(c.umbral_margen_pct ?? 15)}" ${ro}><div class="hint">Debajo de esto la venta queda ▲ Bajo.</div></div>
+      <div class="campo"><label>Brown Flex $ por envío</label><input id="ajBrown" type="number" min="0" value="${esc(c.brown_tarifa_flex ?? '')}" placeholder="pendiente" ${ro}><div class="hint">Solo ventas Flex. Vacío = no se descuenta. Ref. ago-26: CABA $4.417 · E1 $7.702 · E2 $9.264 · E3 $10.737.</div></div>
+      <div class="campo"><label>Embalaje $ por orden</label><input id="ajEmb" type="number" min="0" value="${esc(c.embalaje_por_orden ?? '')}" placeholder="no se descuenta" ${ro}></div>
+      <div class="campo"><label>Prorrateo facturas ML</label><select id="ajProrr" ${ro}><option value="" ${!c.prorrateo_criterio?'selected':''}>Pendiente (no prorratear)</option><option value="facturacion" ${c.prorrateo_criterio==='facturacion'?'selected':''}>Por % de facturación</option><option value="unidades" ${c.prorrateo_criterio==='unidades'?'selected':''}>Por unidades</option></select></div>
+      <div class="campo"><label>Antigüedad máx. del costo (días)</label><input id="ajAntig" type="number" min="1" value="${esc(c.costo_max_antiguedad_dias ?? 120)}" ${ro}><div class="hint">Más viejo = “≈ estimado”.</div></div>
+      <div class="campo"><label>Analizar ventas desde</label><input id="ajDesde" type="date" value="${esc(c.desde || '2025-08-01')}" ${ro}><div class="hint">Antes de ago-2025 no hay detalle de comisión/envío.</div></div>
+    </div>
+    ${S.puedeEditar ? '<div class="acciones"><button class="btn" data-accion="guardarAjustes">Guardar parámetros</button></div>' : ''}
+  </section>
+  <section class="card"><h2>Facturas mensuales de ML ${ayudaInline('f_ml','Cargos de la factura mensual de ML que NO están en la comisión por venta (publicidad, cargos de Full, etc.).','Se reparten entre las ventas del mes según el criterio de prorrateo. Alcance: todo, solo Full/Flex/Colecta o un SKU.','Cuidado con duplicar: la comisión por venta ya está en el neto.')}
+    <span class="der"><button class="chip-btn" data-accion="recargarFacturas">↻</button></span></h2>
+    <div id="facturasLista">${estadoCarga('Cargando facturas…')}</div>
+    ${S.puedeEditar ? `<div class="form-grid" style="margin-top:12px">
+      <div class="campo"><label>Mes</label><input id="fcPeriodo" type="month" value="${hoyAR().slice(0, 7)}"></div>
+      <div class="campo"><label>Concepto</label><input id="fcConcepto" placeholder="Ej: Publicidad Product Ads"></div>
+      <div class="campo"><label>Importe $</label><input id="fcImporte" type="number" step="0.01"></div>
+      <div class="campo"><label>Alcance</label><select id="fcAlcance"><option value="todo">Todas las ventas</option><option value="full">Solo Full</option><option value="flex">Solo Flex</option><option value="colecta">Solo Colecta</option><option value="sku">Un SKU</option></select></div>
+      <div class="campo"><label>SKU (si alcance = SKU)</label><input id="fcSku"></div>
+    </div><div class="acciones"><button class="btn sec" data-accion="guardarFactura">Agregar concepto</button></div>` : ''}
+  </section>
+  <div class="mute" style="font-size:11.5px;text-align:center">Versión ${CONFIG.APP_VERSION} · usuario ${esc(S.email || '')}</div>`;
+}
+async function pintarFacturas() {
+  const el = $('facturasLista'); if (!el) return;
+  try {
+    const r = await api('facturas'); const fs = r.filas || [];
+    if (!$('facturasLista')) return;
+    $('facturasLista').innerHTML = fs.length ? `<div class="tabla-wrap"><table><thead><tr><th>Mes</th><th>Concepto</th><th>Alcance</th><th class="num">Importe</th><th></th></tr></thead><tbody>
+      ${fs.map((f) => `<tr><td>${mesLargo(f.periodo)}</td><td>${esc(f.concepto)}</td><td>${esc(f.alcance)}${f.sku ? ' · ' + esc(f.sku) : ''}</td><td class="num">${plata(f.importe)}</td>
+      <td>${S.puedeEditar ? `<button class="btn sec chico" data-accion="borrarFactura" data-id="${f.id}">🗑</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`
+      : estadoVacio('Todavía no hay facturas cargadas. Pegá los conceptos de la factura de septiembre como primer caso.');
+  } catch (e) { if ($('facturasLista')) $('facturasLista').innerHTML = estadoError(e.message, 'recargarFacturas'); }
+}
+
+/* ============================================================
+   17. MODAL + FUNCIONAMIENTO
+   ============================================================ */
+function abrirModal(html) {
+  $('modalRaiz').innerHTML = `<div class="modal-fondo" data-cerrar-fondo="1"><div class="modal" role="dialog"><button class="chip-btn cerrar" data-accion="cerrarModal">✕</button>${html}</div></div>`;
+}
+let confirmarPendiente = null;
+function confirmar(msg, onOk, txtOk = 'Confirmar') {
+  confirmarPendiente = onOk;
+  abrirModal(`<h3>¿Seguro?</h3><p class="dim">${msg}</p><div class="acciones"><button class="btn peligro" data-accion="confirmarOk">${txtOk}</button><button class="btn sec" data-accion="cerrarModal">Cancelar</button></div>`);
+}
+function abrirFuncionamiento() {
+  abrirModal(`<div class="func"><h3>📖 Funcionamiento de la app</h3>
+  <p class="dim">Muestra cuánta plata deja <b>de verdad</b> cada venta de Mercado Libre: desde el precio de lista hasta el margen final, con el costo de la mercadería que estaba vigente el día de la venta.</p>
+  <h4>¿De dónde salen los datos?</h4><ul>
+    <li><b>Ventas:</b> las órdenes de ML que ya se sincronizan solas (precio de lista, precio cobrado, comisión, envío, neto). Se excluyen las canceladas.</li>
+    <li><b>Costo de mercadería:</b> la última <b>compra con precio</b> anterior a la venta (planilla de compras). Para BBA: lista × 1,21 × 0,96 (4% propio, sin el 5% de pronto pago). Si cargaste un <b>costo manual</b> más nuevo, manda ese. Si no hay nada, se usa el <b>maestro</b> (Excel) y se marca “≈ estimado”.</li>
+    <li><b>Kits</b> (ej. 49x4): suma de sus componentes × cantidad.</li>
+    <li>Nada de esta app modifica Mercado Libre.</li></ul>
+  <h4>Semáforo</h4><ul>
+    <li>${badgeSem('ok')} margen ≥ umbral · ${badgeSem('bajo')} margen positivo pero bajo el umbral (${pct(S.config.umbral_margen_pct ?? 15)} del neto) · ${badgeSem('negativo')} perdés plata · ${badgeSem('sin_costo')} falta el costo.</li>
+    <li><span class="badge b-est">≈ estimado</span>: el costo viene del maestro o tiene más de ${n(S.config.costo_max_antiguedad_dias || 120)} días. Usá “Solo costos confiables” para sacarlas.</li></ul>
+  <h4>Pestañas</h4><ul>
+    <li><b>📊 Resumen:</b> KPIs, cascada del período, margen por mes y top SKUs.</li>
+    <li><b>🧾 Operaciones:</b> cada venta con su margen. Tocá una fila para ver la cascada completa y los links a la orden y la publicación.</li>
+    <li><b>📦 SKU · Publicación · Mes:</b> lo mismo agrupado; tocá los encabezados para ordenar.</li>
+    <li><b>🚨 Alertas:</b> SKUs que venden con margen negativo o bajo, con la causa probable (envío, comisión, precio, descuento).</li>
+    <li><b>💲 Costos:</b> costo real de hoy por SKU vs el maestro; pegá la <b>lista nueva de un proveedor</b> (SKU + precio) para actualizar costos sin esperar la próxima compra; reglas por proveedor.</li>
+    <li><b>🏷️ Stock valorizado:</b> cuánta plata hay en mercadería (propio + Full) a costo real y qué rota lento.</li>
+    <li><b>🧮 Precio piso:</b> dado costo, comisión, envío y margen objetivo, el precio mínimo y el de lista sugerido si aplicás una promo.</li>
+    <li><b>⚙️ Ajustes:</b> umbral de alerta, Brown, embalaje, criterio de prorrateo y las facturas mensuales de ML.</li></ul>
+  <h4>Qué todavía NO incluye el margen</h4><ul>
+    <li>Brown Flex, embalaje y facturas mensuales de ML hasta que los configures.</li>
+    <li>Retenciones/impuestos que descuenta Mercado Pago y devoluciones (fase de conciliación).</li>
+    <li>Gastos fijos del negocio: esto es <b>margen de contribución</b>, no ganancia neta.</li></ul>
+  <h4>Ojo con la inflación</h4><p>Todos los importes son <b>nominales en pesos</b>. Para comparar meses mirá los <b>porcentajes</b>, no los montos.</p>
+  <p class="mute" style="font-size:12px">Versión ${CONFIG.APP_VERSION}</p></div>`);
+}
+
+/* ============================================================
+   18. CSV
+   ============================================================ */
+function descargarCsv(nombre, filas, cols) {
+  const sep = ';';
+  const cel = (v) => { const s = v === null || v === undefined ? '' : (typeof v === 'number' ? String(v).replace('.', ',') : String(v)); return /[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const txt = '﻿' + [cols.map((c) => c[1]).join(sep), ...filas.map((f) => cols.map((c) => cel(typeof c[0] === 'function' ? c[0](f) : f[c[0]])).join(sep))].join('\n');
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([txt], { type: 'text/csv;charset=utf-8' }));
+  a.download = `${hoyAR()}_${nombre}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+/* ============================================================
+   19. EVENTOS
+   ============================================================ */
+document.addEventListener('click', async (ev) => {
+  const t = ev.target;
+  if (t.dataset && t.dataset.cerrarFondo && t === ev.target && t.classList.contains('modal-fondo')) { $('modalRaiz').innerHTML = ''; return; }
+  const tab = t.closest('[data-tab]'); if (tab) { S.tab = tab.dataset.tab; guardarPrefs(); render(); window.scrollTo(0, 0); asegurarDatos(); return; }
+  const ir = t.closest('[data-ir]'); if (ir) { S.tab = ir.dataset.ir; guardarPrefs(); render(); asegurarDatos(); return; }
+  const per = t.closest('[data-periodo]'); if (per) { S.periodo = per.dataset.periodo; guardarPrefs(); renderBarraPeriodo(); if (S.periodo !== 'custom') cargarOps(); return; }
+  const ag = t.closest('[data-agrup]'); if (ag) { S.agrup.por = ag.dataset.agrup; guardarPrefs(); render(); return; }
+  const thO = t.closest('th[data-orden]');
+  if (thO && !t.closest('.ayuda')) {
+    const col = thO.dataset.orden;
+    const orden = S.tab === 'operaciones' ? S.opFiltro.orden : S.tab === 'agrupado' ? S.agrup.orden : S.tab === 'costos' ? S.costosVista.orden : S.tab === 'stock' ? S.stockVista.orden : null;
+    if (orden) { cambiarOrden(orden, col); render(); }
+    return;
+  }
+  const fila = t.closest('tr[data-op]'); if (fila && !t.closest('a')) { abrirDetalleOp(fila.dataset.op); return; }
+  const b = t.closest('[data-accion]'); if (!b) return;
+  const acc = b.dataset.accion;
+  try {
+    switch (acc) {
+      case 'recargar': S.ops = null; await cargarOps(true); break;
+      case 'recargarCostos': await cargarCostos(true); break;
+      case 'recargarStock': await cargarStock(true); break;
+      case 'recargarFacturas': pintarFacturas(); break;
+      case 'cerrarModal': $('modalRaiz').innerHTML = ''; break;
+      case 'confirmarOk': { const f = confirmarPendiente; confirmarPendiente = null; $('modalRaiz').innerHTML = ''; if (f) await f(); break; }
+      case 'masOps': S.opFiltro.limite += CONFIG.FILAS_POR_PAGINA; render(); break;
+      case 'csvOps': descargarCsv('margenes_operaciones', ordenar(opsDeOperaciones(), S.opFiltro.orden), [['fecha','Fecha'],['ml_order_id','Orden'],['sku','SKU'],['item_id','Publicación'],['titulo','Título'],['listing_type','Tipo pub.'],['tipo_envio','Envío'],['units','Unidades'],['precio_lista_unit','Precio lista'],['precio_cobrado_unit','Precio cobrado'],['descuento_pct','Desc %'],['bruto','Bruto'],['comision','Comisión'],['comision_pct','Comisión %'],['envio','Envío $'],['neto_ml','Neto ML'],['costo_unit','Costo unit.'],['costo_total','Costo total'],['costo_fuente','Fuente costo'],['costo_fecha_ref','Fecha costo'],['costo_confiable','Costo confiable'],['brown','Brown'],['embalaje','Embalaje'],['prorrateo_facturas','Facturas ML'],['margen','Margen'],['margen_pct_neto','% neto'],['margen_pct_precio','% precio'],['semaforo','Semáforo']]); break;
+      case 'csvAgrup': { const ls = opsFiltradas(); const a = S.agrup; const g = a.por === 'sku' ? agruparPor(ls, (o) => o.sku) : a.por === 'publicacion' ? agruparPor(ls, (o) => o.item_id || '(sin id)', (o) => o.titulo || '') : a.por === 'envio' ? agruparPor(ls, (o) => o.tipo_envio || 'Sin dato') : a.por === 'tipo' ? agruparPor(ls, (o) => o.listing_type || '—') : agruparPor(ls, (o) => String(o.mes).slice(0, 7));
+        descargarCsv('margenes_por_' + a.por, ordenar(g, a.orden), [['clave', a.por], ['label','Detalle'], ['unidades','Unidades'], ['precioProm','Precio prom.'], ['bruto','Bruto'], ['comisionPct','Comisión %'], ['envioProm','Envío/orden'], ['neto','Neto ML'], ['costo','Costo'], ['margen','Margen'], ['margenPctNeto','% neto'], ['margenPctPrecio','% precio'], ['margenPorUnidad','Margen/u'], ['neg','Negativas'], ['bajo','Bajo umbral']]); break; }
+      case 'csvStock': descargarCsv('stock_valorizado', ordenar(S.stock || [], S.stockVista.orden), [['sku','SKU'],['proveedor','Proveedor'],['propio','Propio'],['en_full','Full'],['total','Total'],['costo_unit','Costo real'],['costo_fuente','Fuente'],['valor','Valor'],['costo_maestro','Costo maestro'],['valor_maestro','Valor maestro'],['unidades_60d','Vendidas 60d'],['dias_cobertura','Cobertura días'],['ultima_venta','Última venta']]); break;
+      case 'calcDesdeOp': $('modalRaiz').innerHTML = ''; precargarCalcSku(b.dataset.sku); S.tab = 'calculadora'; guardarPrefs(); render(); window.scrollTo(0, 0); break;
+      case 'cgPreview': leerCarga(); if (!S.carga.texto.trim()) { toast('Pegá al menos una línea SKU + valor', 'err'); break; } S.carga.preview = prepararPreviewCarga(); render(); break;
+      case 'cgGuardar': leerCarga(); S.carga.preview = prepararPreviewCarga(); { const ok = S.carga.preview.filter((f) => f.ok).length; confirmar(`Se van a guardar <b>${ok}</b> costos con vigencia desde <b>${fechaCorta(S.carga.vigencia || hoyAR())}</b>. Cambia el margen de las ventas desde esa fecha. No toca ML ni el Excel maestro.`, guardarCargaCostos, 'Guardar costos'); } break;
+      case 'borrarManual': confirmar('Se borra este costo manual. El SKU vuelve a tomar el costo de la última compra.', async () => { await api('costo_manual_borrar', { id: Number(b.dataset.id) }); toast('Costo manual borrado', 'ok'); S.ops = null; S.stock = null; await cargarCostos(true); }, 'Borrar'); break;
+      case 'guardarRegla': { const r = await api('regla_guardar', { proveedor_id: $('rgProv').value, metodo: $('rgMetodo').value, iva: n($('rgIva').value) / 100, desc_propio: n($('rgDesc').value) / 100 }); if (r.ok) { toast('Regla guardada', 'ok'); S.ops = null; S.stock = null; await cargarCostos(true); } break; }
+      case 'guardarAjustes': {
+        const v = (id) => $(id).value;
+        const r = await api('config_guardar', { umbral_margen_pct: v('ajUmbral'), brown_tarifa_flex: v('ajBrown') === '' ? null : v('ajBrown'), embalaje_por_orden: v('ajEmb') === '' ? null : v('ajEmb'), prorrateo_criterio: v('ajProrr') || null, costo_max_antiguedad_dias: v('ajAntig'), desde: v('ajDesde') });
+        S.config = r.config; S.ops = null; toast('Parámetros guardados: el margen se recalcula', 'ok'); render(); pintarFacturas(); break; }
+      case 'guardarFactura': {
+        const per = $('fcPeriodo').value; const imp = parsearNumero($('fcImporte').value);
+        if (!per || !$('fcConcepto').value.trim() || !imp) { toast('Completá mes, concepto e importe', 'err'); break; }
+        await api('factura_guardar', { periodo: per + '-01', concepto: $('fcConcepto').value, importe: imp, alcance: $('fcAlcance').value, sku: $('fcSku').value });
+        toast('Concepto agregado', 'ok'); $('fcConcepto').value = ''; $('fcImporte').value = ''; S.ops = null; pintarFacturas(); break; }
+      case 'borrarFactura': confirmar('Se borra este concepto de factura.', async () => { await api('factura_borrar', { id: Number(b.dataset.id) }); toast('Concepto borrado', 'ok'); S.ops = null; pintarFacturas(); }, 'Borrar'); break;
+    }
+  } catch (e) { toast('⚠️ ' + e.message, 'err'); }
+});
+function leerCarga() {
+  const c = S.carga;
+  if ($('cgModo')) { c.modo = $('cgModo').value; c.vigencia = $('cgVig').value; c.proveedor = $('cgProv').value; c.texto = $('cgTexto').value; }
+}
+document.addEventListener('input', (ev) => {
+  const id = ev.target.id;
+  if (id === 'opQ') { S.opFiltro.q = ev.target.value; S.opFiltro.limite = CONFIG.FILAS_POR_PAGINA; rerenderManteniendoFoco(id); }
+  else if (id === 'agQ') { S.agrup.q = ev.target.value; rerenderManteniendoFoco(id); }
+  else if (id === 'cvQ') { S.costosVista.q = ev.target.value; rerenderManteniendoFoco(id); }
+  else if (id && id.startsWith('cc') && id !== 'ccSku') { leerCalc(); calcularPrecioPiso(); }
+});
+document.addEventListener('change', (ev) => {
+  const id = ev.target.id;
+  if (id === 'opEnvio') { S.opFiltro.envio = ev.target.value; render(); }
+  else if (id === 'opSem') { S.opFiltro.sem = ev.target.value; render(); }
+  else if (id === 'chkConfiables') { S.soloConfiables = ev.target.checked; guardarPrefs(); render(); }
+  else if (id === 'chkAlertEst') { S.alertas.incluirEstimados = ev.target.checked; render(); }
+  else if (id === 'cvDif') { S.costosVista.soloDif = ev.target.checked; render(); }
+  else if (id === 'chkLento') { S.stockVista.soloLento = ev.target.checked; render(); }
+  else if (id === 'ccSku') { leerCalc(); if (CALC.sku) { precargarCalcSku(CALC.sku); render(); } }
+  else if (id === 'ccModo') { leerCalc(); calcularPrecioPiso(); }
+  else if (['cgModo', 'cgProv', 'cgVig'].includes(id)) { leerCarga(); if (S.carga.preview) { S.carga.preview = prepararPreviewCarga(); render(); } }
+});
+let debounceT;
+function rerenderManteniendoFoco(id) {
+  clearTimeout(debounceT);
+  debounceT = setTimeout(() => { const el = $(id); const pos = el ? el.selectionStart : null; render(); const n2 = $(id); if (n2) { n2.focus(); if (pos !== null) n2.setSelectionRange(pos, pos); } }, 180);
+}
+$('btnAplicarRango').addEventListener('click', () => {
+  const d = $('fDesde').value, h = $('fHasta').value;
+  if (!d || !h || d > h) { toast('Rango inválido', 'err'); return; }
+  S.desde = d; S.hasta = h; guardarPrefs(); renderBarraPeriodo(); cargarOps();
+});
+$('btnRecargar').addEventListener('click', () => { S.ops = null; cargarOps(true); });
+$('btnFunc').addEventListener('click', abrirFuncionamiento);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') $('modalRaiz').innerHTML = ''; });
+window.addEventListener('resize', () => { if (S.tab === 'resumen') montarGraficoMensual(); });
+
+function asegurarDatos() {
+  if (['resumen', 'operaciones', 'agrupado', 'alertas', 'calculadora'].includes(S.tab)) cargarOps();
+  if (S.tab === 'costos') cargarCostos();
+  if (S.tab === 'stock') cargarStock();
+  if (S.tab === 'ajustes') pintarFacturas();
+}
+
+/* ============================================================
+   20. AUTH + ARRANQUE
+   ============================================================ */
+$('gateTitulo').textContent = `${CONFIG.BRAND.app} · ${CONFIG.BRAND.nombre}`;
+document.title = `${CONFIG.BRAND.app} · ${CONFIG.BRAND.nombre}`;
+async function hacerLogin() {
+  const email = $('gateEmail').value.trim(), pass = $('gatePass').value, err = $('gateError'), btn = $('gateBtn');
+  err.textContent = '';
+  if (!email || !pass) { err.textContent = 'Completá email y contraseña.'; return; }
+  btn.disabled = true; btn.textContent = 'Ingresando…';
+  try { const { error } = await sb.auth.signInWithPassword({ email, password: pass }); if (error) throw error; }
+  catch (_) { err.textContent = 'No se pudo iniciar sesión. Revisá tus datos.'; btn.disabled = false; btn.textContent = 'Ingresar'; }
+}
+$('gateBtn').addEventListener('click', hacerLogin);
+$('gatePass').addEventListener('keydown', (e) => { if (e.key === 'Enter') hacerLogin(); });
+$('btnLogout').addEventListener('click', () => sb.auth.signOut());
+
+let arrancado = false;
+sb.auth.onAuthStateChange(async (_ev, session) => {
+  if (session) {
+    S.auth = 'Bearer ' + session.access_token;
+    $('gate').classList.add('oculto'); $('app').classList.remove('oculto');
+    if (arrancado) return; arrancado = true;
+    leerPrefs(); render();
+    try { await cargarConfig(); } catch (e) {
+      $('vista').innerHTML = estadoError('No se pudo validar tu usuario: ' + e.message, 'recargar'); return;
+    }
+    render(); asegurarDatos();
+  } else {
+    S.auth = null; arrancado = false; S.ops = null; S.costos = null; S.stock = null;
+    $('app').classList.add('oculto'); $('gate').classList.remove('oculto');
+    $('gateBtn').disabled = false; $('gateBtn').textContent = 'Ingresar';
+  }
+});
+sb.auth.getSession();
+</script>
+</body>
+</html>
