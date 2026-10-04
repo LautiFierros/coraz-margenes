@@ -272,7 +272,13 @@ const CONFIG = {
   FILAS_POR_PAGINA: 150,
   TANDA_COSTOS: 50,          // filas por llamada al guardar costos masivos
   DIAS_STOCK_LENTO: 120,     // cobertura (días) a partir de la cual el stock se considera lento
-  APP_VERSION: '2026-10-03.1',
+  APP_VERSION: '2026-10-04.1',
+  FN_BILLING_SYNC: 'ml-billing-sync',   // sync de facturación ML (también corre sola 1 vez por día)
+  BILLING_SYNC_SEG_ESTIMADOS: 45,       // estimado inicial de la sync de facturación (2 períodos)
+  BILLING_SYNC_TIMEOUT_MS: 150000,
+  DESTINOS_TANDA: 60,                   // órdenes Flex por llamada al sincronizar destinos
+  DESTINOS_MAX_TANDAS: 20,              // tope de seguridad del bucle de sync
+  LOGISTICA_NOMBRE: 'Brown',            // nombre visible del proveedor logístico Flex (clonable)
 };
 const STORAGE_KEY = 'margenes_prefs_v1';
 
@@ -291,7 +297,12 @@ const S = {
   periodo: CONFIG.PERIODO_DEFAULT, desde: null, hasta: null,
   soloConfiables: false,
   config: {},
-  ops: null, facturas: [], opsCargando: false, opsError: null, opsRango: null,
+  ops: null, facturas: [], periodosMl: [], costosSinVenta: [], opsCargando: false, opsError: null, opsRango: null,
+  // Ajustes → sub-secciones (logística y facturación se cargan bajo demanda)
+  ajSub: 'parametros',
+  logistica: null, logCargando: false, logError: null,
+  logVista: { qMapeo: '', liqDesde: '', liqHasta: '', sync: null, verHist: false },
+  facturacion: null, facCargando: false, facError: null, facKey: null, facSync: null,
   costos: null, costosCargando: false, costosError: null,
   stock: null, stockCargando: false, stockError: null,
   // estado por vista
@@ -304,7 +315,7 @@ const S = {
 };
 
 function guardarPrefs() {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ tab: S.tab, periodo: S.periodo, desde: S.desde, hasta: S.hasta, soloConfiables: S.soloConfiables, agrupPor: S.agrup.por })); } catch (_) {}
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ tab: S.tab, periodo: S.periodo, desde: S.desde, hasta: S.hasta, soloConfiables: S.soloConfiables, agrupPor: S.agrup.por, ajSub: S.ajSub })); } catch (_) {}
 }
 function leerPrefs() {
   try {
@@ -315,6 +326,7 @@ function leerPrefs() {
     if (p.hasta) S.hasta = p.hasta;
     S.soloConfiables = !!p.soloConfiables;
     if (p.agrupPor) S.agrup.por = p.agrupPor;
+    if (p.ajSub) S.ajSub = p.ajSub;
   } catch (_) {}
 }
 
@@ -355,17 +367,18 @@ function toast(msg, tipo = '') {
 }
 
 // Fetch robusto con timeout + reintentos (solo ante red/5xx)
-async function api(accion, payload = {}, { timeout = CONFIG.TIMEOUT_MS, reintentos = CONFIG.REINTENTOS } = {}) {
+// fn: otra Edge Function (ej. la sync de facturación); en ese caso el body va sin "accion".
+async function api(accion, payload = {}, { timeout = CONFIG.TIMEOUT_MS, reintentos = CONFIG.REINTENTOS, fn = CONFIG.FN } = {}) {
   let ultimo;
   for (let i = 0; i <= reintentos; i++) {
     const ctrl = new AbortController();
     const tm = setTimeout(() => ctrl.abort(), timeout);
     try {
       if (!S.auth) throw new Error('Sesión vencida: volvé a ingresar.');
-      const r = await fetch(`${CONFIG.SUPABASE_URL}/functions/v1/${CONFIG.FN}`, {
+      const r = await fetch(`${CONFIG.SUPABASE_URL}/functions/v1/${fn}`, {
         method: 'POST', signal: ctrl.signal,
         headers: { 'Content-Type': 'application/json', Authorization: S.auth, apikey: CONFIG.SUPABASE_ANON_KEY },
-        body: JSON.stringify({ accion, ...payload }),
+        body: JSON.stringify(fn === CONFIG.FN ? { accion, ...payload } : payload),
       });
       let data = null; try { data = await r.json(); } catch (_) {}
       if (r.status === 401) { await sb.auth.signOut(); throw new Error('Sesión vencida o usuario sin acceso.'); }
@@ -384,6 +397,24 @@ async function api(accion, payload = {}, { timeout = CONFIG.TIMEOUT_MS, reintent
   throw ultimo;
 }
 const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/* ---------- Progreso con tiempo estimado (procesos largos o por tandas) ----------
+   - Con total conocido: X/Y y "resta ~Ns" según el ritmo real de lo ya procesado.
+   - Sin total (una sola llamada larga): estimado inicial que se va descontando. */
+function progresoHtml({ etiqueta, hechos = 0, total = null, t0, estimadoSeg = null }) {
+  const seg = (Date.now() - t0) / 1000;
+  let resta = null;
+  if (total && hechos > 0) resta = Math.max(0, Math.round((seg / hechos) * (total - hechos)));
+  else if (estimadoSeg) resta = Math.round(estimadoSeg - seg);
+  const ancho = total ? (100 * hechos) / total : estimadoSeg ? Math.min(95, (100 * seg) / estimadoSeg) : 5;
+  const cuenta = total !== null ? ` ${num(hechos)}/${num(total)}` : '';
+  const txt = seg < 1.5 && estimadoSeg ? `estimado ~${estimadoSeg} s`
+    : resta === null ? `${Math.round(seg)} s`
+    : resta <= 0 ? `${Math.round(seg)} s · está tardando más de lo normal, sigue trabajando…`
+    : `resta ~${resta} s`;
+  return `${etiqueta}${cuenta} · ${txt}<div class="barra"><div style="width:${ancho}%"></div></div>`;
+}
+function pintar(id, html) { const el = $(id); if (el) el.innerHTML = html; }
 
 /* ---------- Ayuda "?" (popover) ---------- */
 // Toda métrica en pantalla lleva su "?": qué es · cómo se calcula · de dónde sale.
@@ -495,12 +526,13 @@ async function cargarOps(forzar = false) {
   S.opsCargando = true; S.opsError = null; S.opsInicio = Date.now(); render();
   try {
     const r = await api('operaciones', { from, to });
-    S.ops = (r.filas || []).map(normalizarOp); S.facturas = r.facturas || []; S.config = r.config || S.config; S.opsRango = clave;
+    S.ops = (r.filas || []).map(normalizarOp); S.facturas = r.facturas || []; S.periodosMl = r.periodos_ml || []; S.config = r.config || S.config; S.opsRango = clave;
+    S.costosSinVenta = (r.costos_sin_venta || []).map((x) => ({ ...x, costo: x.costo === null ? null : Number(x.costo) }));
   } catch (e) { S.opsError = e.message; S.ops = null; }
   S.opsCargando = false; render();
 }
 function normalizarOp(o) {
-  const nums = ['units','cuotas','cupon_ml','precio_lista_unit','precio_cobrado_unit','descuento_unit','descuento_pct','bruto','comision','comision_pct','envio','neto_ml','costo_unit','costo_total','costo_antiguedad_dias','brown','embalaje','prorrateo_facturas','margen','margen_pct_neto','margen_pct_precio'];
+  const nums = ['units','cuotas','cupon_ml','precio_lista_unit','precio_cobrado_unit','descuento_unit','descuento_pct','bruto','comision','comision_pct','envio','neto_ml','costo_unit','costo_total','costo_antiguedad_dias','brown','embalaje','prorrateo_facturas','margen','margen_pct_neto','margen_pct_precio','cargo_ml_periodo','iibb_periodo'];
   nums.forEach((k) => { o[k] = o[k] === null || o[k] === undefined ? null : Number(o[k]); });
   o.lista_total = n(o.precio_lista_unit) * n(o.units);
   o.descuento_total = n(o.descuento_unit) * n(o.units);
@@ -518,6 +550,29 @@ async function cargarStock(forzar = false) {
   try { const r = await api('stock'); S.stock = (r.filas || []).map((f) => { ['propio','en_full','total','costo_unit','valor','costo_maestro','valor_maestro','unidades_60d','dias_cobertura'].forEach((k) => f[k] = f[k] === null ? null : Number(f[k])); return f; }); } catch (e) { S.stockError = e.message; }
   S.stockCargando = false; render();
 }
+// Logística Flex: tarifas, mapeo, cola sin zona, liquidaciones y conciliación
+async function cargarLogistica(forzar = false) {
+  if (S.logistica && !forzar) return;
+  S.logCargando = true; S.logError = null; S.logInicio = Date.now(); render();
+  try {
+    const r = await api('logistica');
+    ['tarifas', 'liquidaciones', 'conciliacion'].forEach((k) => (r[k] || []).forEach((f) => ['tarifa', 'total', 'total_liquidado', 'envios', 'envios_liquidados', 'envios_calculados', 'de_ventas_canceladas', 'sin_zona_en_rango'].forEach((c) => { if (c in f) f[c] = f[c] === null ? null : Number(f[c]); })));
+    S.logistica = r;
+  } catch (e) { S.logError = e.message; }
+  S.logCargando = false; render();
+}
+// Facturación ML: períodos sincronizados + conceptos del período elegido
+async function cargarFacturacion(forzar = false, key = S.facKey) {
+  if (S.facturacion && !forzar && key === S.facKey) return;
+  S.facCargando = true; S.facError = null; S.facInicio = Date.now(); S.facKey = key; render();
+  try {
+    const r = await api('facturacion', key ? { periodo_key: key } : {});
+    (r.periodos || []).forEach((p) => ['factura_total', 'descontado_ventas', 'cobrado_aparte', 'pagado', 'nc_aplicadas', 'deuda', 'iibb_percepciones', 'otros_cargos_aparte', 'bonif_notas_credito', 'flex_cashback', 'extra_sin_iibb'].forEach((c) => { p[c] = p[c] === null ? null : Number(p[c]); }));
+    (r.conceptos || []).forEach((c) => { c.monto = Number(c.monto); });
+    S.facturacion = r;
+  } catch (e) { S.facError = e.message; }
+  S.facCargando = false; render();
+}
 
 /* ============================================================
    7. CÁLCULOS (agregaciones en el navegador sobre las líneas)
@@ -529,9 +584,11 @@ function opsFiltradas() {
 // Agrega un conjunto de líneas → totales de la cascada
 function agregar(lineas) {
   const t = { lineas: lineas.length, ordenes: new Set(), unidades: 0, lista: 0, descuento: 0, bruto: 0, comision: 0, envio: 0, neto: 0,
-    costo: 0, brown: 0, embalaje: 0, prorrateo: 0, margen: 0, netoConCosto: 0, brutoConCosto: 0, conCosto: 0, confiables: 0, neg: 0, bajo: 0, sinCosto: 0, conDescuento: 0 };
+    costo: 0, brown: 0, embalaje: 0, prorrateo: 0, cargoMl: 0, iibbDesc: 0, iibbTotal: 0, margen: 0, netoConCosto: 0, brutoConCosto: 0, conCosto: 0, confiables: 0, neg: 0, bajo: 0, sinCosto: 0, conDescuento: 0,
+    ordenesFlex: new Set(), ordenesFlexEstimadas: new Set(), brownTodo: 0 };
   for (const o of lineas) {
-    t.ordenes.add(o.ml_order_id);
+    t.ordenes.add(o.ml_order_id); t.iibbTotal += n(o.iibb_periodo);
+    if (o.tipo_envio === 'Flex') { t.ordenesFlex.add(o.ml_order_id); t.brownTodo += n(o.brown); if (o.brown_estimado) t.ordenesFlexEstimadas.add(o.ml_order_id); }
     t.unidades += n(o.units); t.lista += o.lista_total; t.descuento += o.descuento_total; t.bruto += n(o.bruto);
     t.comision += n(o.comision); t.envio += n(o.envio); t.neto += n(o.neto_ml);
     if (o.descuento_total > 0) t.conDescuento++;
@@ -539,10 +596,13 @@ function agregar(lineas) {
     if (o.semaforo === 'negativo') t.neg++; else if (o.semaforo === 'bajo') t.bajo++; else if (o.semaforo === 'sin_costo') t.sinCosto++;
     if (o.costo_completo) {
       t.conCosto++; t.costo += n(o.costo_total); t.brown += n(o.brown); t.embalaje += n(o.embalaje);
-      t.prorrateo += n(o.prorrateo_facturas); t.margen += n(o.margen); t.netoConCosto += n(o.neto_ml); t.brutoConCosto += n(o.bruto);
+      t.prorrateo += n(o.prorrateo_facturas); t.cargoMl += n(o.cargo_ml_periodo); if (o.iibb_descontado) t.iibbDesc += n(o.iibb_periodo);
+      t.margen += n(o.margen); t.netoConCosto += n(o.neto_ml); t.brutoConCosto += n(o.bruto);
     }
   }
-  t.ordenes = t.ordenes.size;
+  t.ordenes = t.ordenes.size; t.flex = t.ordenesFlex.size; t.flexEstimadas = t.ordenesFlexEstimadas.size;
+  delete t.ordenesFlex; delete t.ordenesFlexEstimadas;
+  t.brownProm = t.flex ? t.brownTodo / t.flex : null;
   // con neto ≤ 0 el % sobre neto no tiene sentido (daría >100% o signo invertido)
   t.margenPctNeto = t.netoConCosto > 0 ? 100 * t.margen / t.netoConCosto : null;
   t.margenPctPrecio = t.brutoConCosto > 0 ? 100 * t.margen / t.brutoConCosto : null;
@@ -573,7 +633,7 @@ const TABS = [
   { id: 'costos', label: '💲 Costos' },
   { id: 'stock', label: '🏷️ Stock valorizado' },
   { id: 'calculadora', label: '🧮 Precio piso' },
-  { id: 'ajustes', label: '⚙️ Ajustes y facturas ML' },
+  { id: 'ajustes', label: '⚙️ Ajustes · Logística · Facturación' },
 ];
 function renderTabs() { $('tabs').innerHTML = TABS.map((t) => `<button data-tab="${t.id}" class="${S.tab === t.id ? 'activo' : ''}">${t.label}</button>`).join(''); }
 
@@ -599,11 +659,29 @@ function necesitaOps() {
 }
 function avisosConfig() {
   const c = S.config || {}; const out = [];
-  if (c.brown_tarifa_flex == null) out.push('Brown Flex <b>no se descuenta</b> todavía (tarifa sin definir). Configuralo en ⚙️ Ajustes.');
-  if (c.prorrateo_criterio == null) out.push('Las facturas mensuales de ML <b>no se prorratean</b> todavía (criterio sin definir).');
   if (c.embalaje_por_orden == null) out.push('Embalaje por orden sin cargar (no se descuenta).');
-  if (!out.length) return '';
-  return `<div class="aviso info"><span class="ico">ℹ️</span><div>El margen todavía <b>no incluye</b>: ${out.map((x) => '<br>• ' + x).join('')}<br><span class="dim">Tampoco incluye retenciones/impuestos de MP ni devoluciones (se suman en la fase de conciliación).</span></div></div>`;
+  if (!(S.periodosMl || []).length) out.push('Facturación ML: no hay períodos sincronizados que cubran estas fechas (ver ⚙️ → Facturación ML).');
+  const info = out.length ? `<div class="aviso info"><span class="ico">ℹ️</span><div>El margen todavía <b>no incluye</b>: ${out.map((x) => '<br>• ' + x).join('')}<br><span class="dim">Tampoco incluye devoluciones ni retenciones de MP fuera de la factura de ML.</span></div></div>` : '';
+  return avisoIibb() + avisoLogistica() + info;
+}
+// Envíos Flex cuyo costo logístico es estimado (sin destino o destino sin zona en el mapeo)
+function avisoLogistica() {
+  if (!S.ops) return '';
+  const t = agregar(opsFiltradas()); if (!t.flexEstimadas) return '';
+  const zd = S.config.logistica_zona_default;
+  return `<div class="aviso warn"><span class="ico">🚚</span><div><b>${num(t.flexEstimadas)} envío(s) Flex con costo ${esc(CONFIG.LOGISTICA_NOMBRE)} estimado</b>: no tienen zona asignada${zd ? `, así que se cobran como <b>${esc(zonaLarga(zd))}</b>` : ''}.
+    Asignales la zona en <a href="#" data-ir-aj="logistica">⚙️ → Logística Flex</a> y el margen se corrige solo.</div></div>`;
+}
+// La incógnita IIBB se muestra SIEMPRE que haya percepciones sin descontar (decisión pendiente con el contador)
+function iibbPendiente(t) { return (S.config.iibb_tratamiento || 'pendiente') === 'pendiente' ? t.iibbTotal : 0; }
+function avisoIibb() {
+  const trat = S.config.iibb_tratamiento || 'pendiente';
+  if (trat !== 'pendiente' || !S.ops) return '';
+  const t = agregar(opsFiltradas()); if (!t.iibbTotal) return '';
+  return `<div class="aviso warn"><span class="ico">❓</span><div><b>Incógnita abierta: percepciones de IIBB ${plata(t.iibbTotal)} en el período.</b>
+    ML las cobra aparte en su factura (≈${pct(t.neto ? 100 * t.iibbTotal / t.neto : null)} del neto). <b>Hoy NO se descuentan del margen</b> hasta definir con el contador si son costo o si las computás como pago a cuenta.
+    Si fueran costo, el margen del período bajaría a <b>${plata(t.margen - t.iibbTotal)}</b> (${pct(t.netoConCosto ? 100 * (t.margen - t.iibbTotal) / t.netoConCosto : null)} del neto).
+    <span class="dim">Se cambia en <a href="#" data-ir-aj="facturacion">⚙️ → Facturación ML</a>.</span></div></div>`;
 }
 
 /* ============================================================
@@ -616,11 +694,13 @@ function vistaResumen() {
   const t = agregar(ls);
   const facturasPeriodo = S.facturas.reduce((a, f) => a + n(f.importe), 0);
   const umbral = n(S.config.umbral_margen_pct || 15);
+  const sinVenta = (S.costosSinVenta || []).reduce((a, x) => a + n(x.costo), 0);
+  const LOG = esc(CONFIG.LOGISTICA_NOMBRE);
   return `
   ${avisosConfig()}
   <div class="kpis">
     ${kpi({ label: 'Margen real', valor: plata(t.margen), sub: `${pct(t.margenPctNeto)} del neto · ${pct(t.margenPctPrecio)} del precio`, destacado: true, clase: t.margen < 0 ? 'neg' : '',
-      key: 'k_margen', que: 'Lo que queda de las ventas después de pagar todo lo que hoy se puede medir.', calculo: 'Σ (neto ML − costo de mercadería − Brown − embalaje − prorrateo de facturas ML), solo líneas con costo.', fuente: 'Ventas ML (ml_ventas_lineas) + costo vigente a la fecha de cada venta (compras / costos manuales / maestro).' })}
+      key: 'k_margen', que: 'Lo que queda de las ventas después de pagar todo lo que hoy se puede medir.', calculo: `Σ (neto ML − costo de mercadería − logística Flex ${LOG} por zona − embalaje − facturación ML imputada − percepciones IIBB si se tratan como costo), solo líneas con costo. No resta los envíos de ventas canceladas (van aparte, abajo de la cascada).`, fuente: 'Ventas ML (ml_ventas_lineas) + costo vigente a la fecha de cada venta + tarifas y zonas de logística + facturación ML.' })}
     ${kpi({ label: 'Facturación bruta', valor: plata(t.bruto), sub: `${num(t.ordenes)} órdenes · ${num(t.unidades)} u`,
       key: 'k_bruto', que: 'Lo que pagaron los compradores por los productos (sin envío).', calculo: 'Σ precio cobrado × unidades.', fuente: 'gross_amount de cada línea de venta ML (no canceladas).' })}
     ${kpi({ label: 'Neto ML', valor: plata(t.neto), sub: `${pct(t.bruto ? 100 * t.neto / t.bruto : null)} del bruto`,
@@ -639,13 +719,22 @@ function vistaResumen() {
       key: 'k_alert', que: 'Líneas con margen negativo o por debajo del umbral.', calculo: `Negativo: margen < 0. Bajo: margen < ${umbral}% del neto.`, fuente: 'Semáforo de v_margen_operacion. Ver pestaña 🚨 Alertas.' })}
     ${kpi({ label: 'Costo confiable', valor: pct(t.coberturaConfiable), sub: `${num(t.confiables)} de ${num(t.lineas)} líneas · ${num(t.sinCosto)} sin costo`,
       key: 'k_conf', que: 'Qué parte de las ventas tiene un costo bien respaldado.', calculo: `Confiable = costo de compras o manual, con no más de ${n(S.config.costo_max_antiguedad_dias || 120)} días de antigüedad respecto de la venta.`, fuente: 'Las demás usan el maestro (valor de hoy) o una compra vieja → “≈ estimado”.' })}
-    ${facturasPeriodo ? kpi({ label: 'Facturas ML cargadas', valor: plata(facturasPeriodo), sub: S.config.prorrateo_criterio ? 'prorrateadas en el margen' : 'sin prorratear (definir criterio)',
-      key: 'k_fac', que: 'Cargos mensuales de ML aparte de la comisión por venta (publicidad, Full, etc.).', calculo: 'Σ importes cargados para los meses del período.', fuente: 'Tabla ml_facturas_mensuales (pestaña ⚙️).' }) : ''}
+    ${kpi({ label: 'Facturación ML (neto)', valor: plata(-t.cargoMl, true), clase: t.cargoMl > 0 ? 'neg' : 'pos', sub: t.cargoMl > 0 ? 'costo extra cobrado aparte' : 'a favor: bonificaciones > cargos',
+      key: 'k_fml', que: 'Lo que ML factura APARTE de lo que ya descontó en cada venta: cargos de Colecta/Full, almacenamiento, Mercado Pago, suscripción, menos las bonificaciones (notas de crédito) y la devolución del envío Flex. Positivo = te devolvieron más de lo que te cobraron.', calculo: '(Cobrado aparte − percepciones IIBB − bonificaciones por NC) prorrateado por facturación entre las ventas del período de ML (17→16), menos la bonificación Flex imputada a cada orden.', fuente: 'API de facturación de ML (sync diaria ml-billing-sync). La comisión y el envío de cada venta NO se vuelven a restar: ya están en el neto.' })}
+    ${kpi({ label: (S.config.iibb_tratamiento || 'pendiente') === 'pendiente' ? 'Percepciones IIBB ❓' : 'Percepciones IIBB', valor: plata(t.iibbTotal),
+      sub: { pendiente: 'NO descontadas · a definir con el contador', costo: 'descontadas del margen', computable: 'no descontadas (las computa el contador)' }[S.config.iibb_tratamiento || 'pendiente'], clase: (S.config.iibb_tratamiento || 'pendiente') === 'pendiente' ? '' : '',
+      key: 'k_iibb', que: 'Percepciones de Ingresos Brutos (CABA, Bs. As., Tucumán, Salta, Catamarca, Neuquén, Corrientes…) que ML te cobra en su factura mensual.', calculo: 'Cargos de impuestos de la factura de ML − bonificaciones de percepciones en notas de crédito, prorrateado por facturación entre las ventas del período.', fuente: 'API de facturación de ML. Decisión pendiente: ¿son costo o pago a cuenta? (⚙️ Ajustes).' })}
+    ${kpi({ label: `Logística Flex (${LOG})`, valor: plata(t.brownTodo), sub: t.flex ? `${num(t.flex)} envíos · ${plata(t.brownProm)} prom.${t.flexEstimadas ? ` · <span style="color:var(--warn)">${num(t.flexEstimadas)} estimados</span>` : ''}` : 'sin ventas Flex en el período',
+      key: 'k_log', que: `Lo que te cobra ${LOG} por llevar los envíos Flex (logística propia). Solo aplica a ventas Flex.`, calculo: 'Tarifa de la zona del destino vigente a la fecha de entrega (CABA / Zona 1 / Zona 2 / Zona 3), repartida entre las líneas de la orden. Si el destino no tiene zona, se usa la zona por defecto y queda marcado como “estimado”. Este KPI suma todos los envíos Flex; la cascada solo los de ventas con costo cargado.', fuente: `Destino de cada envío (API de envíos de ML, sync cada 6 h) + mapeo de zonas y tarifas con vigencia cargados en ⚙️ → Logística Flex. Se controla contra la liquidación quincenal de ${LOG}.` })}
+    ${sinVenta ? kpi({ label: 'Envíos de ventas canceladas', valor: plata(-sinVenta), clase: 'neg', sub: `${num(S.costosSinVenta.length)} envío(s) que salieron igual`,
+      key: 'k_sv', que: `Ventas Flex que se cancelaron después de despachar: no hay venta, pero ${LOG} cobra el viaje igual.`, calculo: 'Tarifa de la zona del destino a la fecha de entrega, por cada orden cancelada cuyo envío salió.', fuente: 'v_margen_costos_sin_venta (órdenes canceladas + destino del envío + tarifas). Se resta al final de la cascada del período, no a una venta puntual.' }) : ''}
+    ${facturasPeriodo ? kpi({ label: 'Facturas ML manuales', valor: plata(facturasPeriodo), sub: 'cargadas a mano en ⚙️',
+      key: 'k_fac', que: 'Cargos extra cargados a mano (opcional; la facturación de ML ya entra sola).', calculo: 'Σ importes cargados para los meses del período, prorrateados por facturación.', fuente: 'Tabla ml_facturas_mensuales (pestaña ⚙️).' }) : ''}
   </div>
 
   <div class="grid2">
     <section class="card"><h2>Cascada del período ${ayudaInline('c_cas', 'Cómo se va del precio de lista al margen real, sumando todas las líneas del período.', 'Cada barra resta (o es un subtotal) sobre la anterior. Los porcentajes son sobre el precio de lista.', 'Mismas líneas que los KPIs.')}</h2>
-      ${cascadaHtml({ lista: t.lista, descuento: t.descuento, bruto: t.bruto, comision: t.comision, envio: t.envio, neto: t.neto, costo: t.costo, brown: t.brown, embalaje: t.embalaje, prorrateo: t.prorrateo, margen: t.margen, sinCosto: t.conCosto < t.lineas })}
+      ${cascadaHtml({ lista: t.lista, descuento: t.descuento, bruto: t.bruto, comision: t.comision, envio: t.envio, neto: t.neto, costo: t.costo, brown: t.brown, embalaje: t.embalaje, prorrateo: t.prorrateo, cargoMl: t.cargoMl, iibbDesc: t.iibbDesc, iibbPend: iibbPendiente(t), margen: t.margen, sinCosto: t.conCosto < t.lineas, sinVenta })}
     </section>
     <section class="card"><h2>Margen real por mes ${ayudaInline('c_mes', 'Margen real de cada mes del período (pasá el dedo o el mouse por las barras para ver el detalle).', 'Misma fórmula que el KPI de margen, agrupado por mes de venta (hora Argentina).', 'Importes NOMINALES en ARS: no compares meses sin tener en cuenta la inflación.')}
       <span class="der dim">nominal ARS</span></h2>
@@ -668,11 +757,15 @@ function cascadaHtml(c) {
     { lbl: '− Envío', v: -c.envio },
     { lbl: 'Neto ML', v: c.neto, tipo: 'sub' },
     { lbl: '− Costo mercadería', v: -c.costo },
-    { lbl: '− Brown Flex', v: -c.brown, opc: true },
+    { lbl: '− Logística Flex', v: -c.brown, opc: true },
     { lbl: '− Embalaje', v: -c.embalaje, opc: true },
-    { lbl: '− Facturas ML', v: -c.prorrateo, opc: true },
+    { lbl: '− Facturas ML (manual)', v: -c.prorrateo, opc: true },
+    { lbl: c.cargoMl >= 0 ? '− Facturación ML' : '+ Bonif. facturación ML', v: -(c.cargoMl || 0), opc: true },
+    { lbl: '− Percepciones IIBB', v: -(c.iibbDesc || 0), opc: true },
     { lbl: 'Margen real', v: c.margen, tipo: 'fin' },
   ];
+  // Costos del período que no pertenecen a ninguna venta (envíos de ventas canceladas)
+  if (c.sinVenta) pasos.push({ lbl: '− Envíos cancelados', v: -c.sinVenta }, { lbl: 'Margen del período', v: c.margen - c.sinVenta, tipo: 'fin' });
   let corriente = 0; let html = '';
   for (const p of pasos) {
     if (p.opc && !p.v) continue;
@@ -684,6 +777,7 @@ function cascadaHtml(c) {
       <div class="cas-pista"><div class="cas-bar ${clase}" style="left:${l}%;width:${Math.min(w, 100 - l)}%"></div></div>
       <div class="val">${plata(p.v)}<span class="pct">${pct(base ? 100 * p.v / base : null)}</span></div></div>`;
   }
+  if (c.iibbPend) html += `<div class="aviso warn" style="margin:8px 0 0"><span class="ico">❓</span><div><b>Percepciones IIBB sin descontar: ${plata(c.iibbPend)}</b> — incógnita a definir con el contador. Si fueran costo, el margen quedaría en <b>${plata(c.margen - c.iibbPend)}</b>.</div></div>`;
   if (c.sinCosto) html += `<div class="mute" style="font-size:11.5px;margin-top:6px">Las líneas sin costo suman en lista/bruto/neto pero no en costo ni margen.</div>`;
   return `<div class="cascada">${html}</div>`;
 }
@@ -749,6 +843,9 @@ function opsDeOperaciones() {
     (f.envio === 'todos' || (f.envio === 'sin' ? !o.tipo_envio : o.tipo_envio === f.envio)) &&
     (f.sem === 'todos' || o.semaforo === f.sem || (f.sem === 'estimado' && o.costo_completo && !o.costo_confiable)));
 }
+// "Esfera 1" → "Z1" (el mapa de Brown dice Zona 1/2/3; las liquidaciones dicen Esfera)
+function zonaCorta(z) { if (!z) return 'sin zona'; const m = /(\d+)\s*$/.exec(z); return m ? 'Z' + m[1] : z; }
+function zonaLarga(z) { if (!z) return 'Sin zona'; const m = /(\d+)\s*$/.exec(z); return m ? `Zona ${m[1]}` : z; }
 function vistaOperaciones() {
   const bloq = necesitaOps(); if (bloq) return bloq;
   const f = S.opFiltro; const filas = ordenar(opsDeOperaciones(), f.orden); const t = agregar(filas);
@@ -774,7 +871,7 @@ function vistaOperaciones() {
   </tr></thead><tbody>
   ${filas.slice(0, f.limite).map((x) => `<tr class="click" data-op="${esc(x.id)}">
     <td>${fechaCorta(x.fecha)}</td><td class="mono">${esc(x.sku)}</td><td class="titulo dim" title="${esc(x.titulo)}">${esc(x.titulo || '—')}</td>
-    <td>${x.tipo_envio ? `<span class="badge b-neutro">${esc(x.tipo_envio)}</span>` : '<span class="mute">—</span>'}</td>
+    <td>${x.tipo_envio ? `<span class="badge b-neutro">${esc(x.tipo_envio)}${x.tipo_envio === 'Flex' ? ` · ${esc(zonaCorta(x.zona_logistica))}` : ''}</span>${x.brown_estimado ? ' <span class="badge b-bajo" title="Sin zona: costo logístico estimado">≈</span>' : ''}` : '<span class="mute">—</span>'}</td>
     <td class="num">${num(x.units)}</td><td class="num">${plata(x.precio_cobrado_unit)}</td>
     <td class="num ${x.descuento_pct > 0 ? '' : 'mute'}">${x.descuento_pct > 0 ? pct(x.descuento_pct) : '—'}</td>
     <td class="num">${plata(x.comision)}<span class="mute" style="font-size:10.5px"> ${pct(x.comision_pct)}</span></td>
@@ -790,7 +887,9 @@ function vistaOperaciones() {
 function abrirDetalleOp(id) {
   const o = (S.ops || []).find((x) => String(x.id) === String(id)); if (!o) return;
   const cas = cascadaHtml({ lista: o.lista_total, descuento: o.descuento_total, bruto: n(o.bruto), comision: n(o.comision), envio: n(o.envio), neto: n(o.neto_ml),
-    costo: n(o.costo_total), brown: n(o.brown), embalaje: n(o.embalaje), prorrateo: n(o.prorrateo_facturas), margen: o.margen ?? 0, sinCosto: !o.costo_completo });
+    costo: n(o.costo_total), brown: n(o.brown), embalaje: n(o.embalaje), prorrateo: n(o.prorrateo_facturas), cargoMl: n(o.cargo_ml_periodo),
+    iibbDesc: o.iibb_descontado ? n(o.iibb_periodo) : 0, iibbPend: (S.config.iibb_tratamiento || 'pendiente') === 'pendiente' ? n(o.iibb_periodo) : 0,
+    margen: o.margen ?? 0, sinCosto: !o.costo_completo });
   abrirModal(`
     <h3>${esc(o.sku)} · ${badgeSem(o.semaforo)}${badgeEst(o)}</h3>
     <div class="dim" style="font-size:12.5px">${esc(o.titulo || '')}</div>
@@ -800,12 +899,17 @@ function abrirDetalleOp(id) {
       <div><span>Publicación</span>${o.item_id ? `<a href="${CONFIG.ML_ITEM_URL(o.item_id)}" target="_blank" rel="noopener">${esc(o.item_id)} ↗</a>` : '—'}</div>
       <div><span>Tipo publicación</span>${esc({ gold_special: 'Clásica (gold_special)', gold_pro: 'Premium (gold_pro)' }[o.listing_type] || o.listing_type || '—')}</div>
       <div><span>Envío</span>${esc(o.tipo_envio || 'sin dato')}</div>
+      ${o.tipo_envio === 'Flex' ? `<div><span>Zona ${esc(CONFIG.LOGISTICA_NOMBRE)}</span>${esc(zonaLarga(o.zona_logistica))} ${o.brown_estimado ? '<span class="badge b-bajo">≈ estimada</span>' : ''}</div>
+      <div><span>Logística Flex imputada</span>${plata(o.brown)}</div>` : ''}
       <div><span>Pago</span>${esc(o.medio_pago || '—')} · ${o.cuotas > 1 ? o.cuotas + ' cuotas' : 'contado'}</div>
       <div><span>Unidades</span>${num(o.units)}</div>
       <div><span>Precio lista → cobrado</span>${plata(o.precio_lista_unit)} → ${plata(o.precio_cobrado_unit)}</div>
       <div><span>Comisión efectiva</span>${pct(o.comision_pct)}</div>
       <div><span>Costo unitario</span>${plata(o.costo_unit)}</div>
       <div><span>Fuente del costo</span>${esc(o.costo_fuente || '—')}${o.proveedor ? ' · ' + esc(o.proveedor) : ''}</div>
+      <div><span>Período de facturación ML</span>${o.periodo_ml ? mesLargo(o.periodo_ml) + ' (17→16)' : 'sin sincronizar'}</div>
+      <div><span>Facturación ML imputada</span>${plata(-o.cargo_ml_periodo, true)}</div>
+      <div><span>Percepciones IIBB imputadas</span>${plata(o.iibb_periodo)} ${o.iibb_descontado ? '' : '<span class="badge b-bajo">❓ sin descontar</span>'}</div>
       <div><span>Costo de referencia</span>${fechaCorta(o.costo_fecha_ref)}${o.costo_antiguedad_dias != null ? ` (${num(o.costo_antiguedad_dias)} días antes)` : ''}</div>
       ${o.cupon_ml > 0 ? `<div><span>Cupón (pagado por ML)</span>${plata(o.cupon_ml)}</div>` : ''}
     </div>
@@ -823,29 +927,40 @@ function vistaAgrupado() {
   const bloq = necesitaOps(); if (bloq) return bloq;
   const a = S.agrup; const q = a.q.trim().toLowerCase();
   const ls = opsFiltradas();
-  const grupos = a.por === 'sku' ? agruparPor(ls, (o) => o.sku)
-    : a.por === 'publicacion' ? agruparPor(ls, (o) => o.item_id || '(sin id)', (o) => `${o.titulo || ''}`)
-    : a.por === 'envio' ? agruparPor(ls, (o) => o.tipo_envio || 'Sin dato')
-    : a.por === 'tipo' ? agruparPor(ls, (o) => ({ gold_special: 'Clásica', gold_pro: 'Premium' }[o.listing_type] || o.listing_type || '—'))
-    : agruparPor(ls, (o) => String(o.mes).slice(0, 7));
+  const grupos = gruposAgrupado(ls, a.por);
   const filtrados = grupos.filter((g) => !q || String(g.clave).toLowerCase().includes(q) || String(g.label).toLowerCase().includes(q));
   return `
   <div class="barra-filtros">
-    <div class="seg" id="segAgrup">${[['sku','Por SKU'],['publicacion','Por publicación'],['mes','Por mes'],['envio','Por tipo de envío'],['tipo','Por tipo de publicación']].map(([v,l]) => `<button data-agrup="${v}" class="${a.por===v?'activo':''}">${l}</button>`).join('')}</div>
+    <div class="seg" id="segAgrup">${[['sku','Por SKU'],['publicacion','Por publicación'],['mes','Por mes'],['envio','Por tipo de envío'],['zona','Por zona Flex'],['tipo','Por tipo de publicación']].map(([v,l]) => `<button data-agrup="${v}" class="${a.por===v?'activo':''}">${l}</button>`).join('')}</div>
     <input id="agQ" placeholder="Filtrar…" value="${esc(a.q)}" style="flex:1;min-width:140px">
     <button class="btn sec chico" data-accion="csvAgrup">⬇ CSV</button>
   </div>
+  ${a.por === 'zona' ? `<div class="aviso info"><span class="ico">🚚</span><div>Solo ventas <b>Flex</b>, agrupadas por la zona de ${esc(CONFIG.LOGISTICA_NOMBRE)} del destino. La columna “Logística” es lo que se paga por esos envíos.</div></div>` : ''}
   ${a.por === 'mes' ? '<div class="aviso warn"><span class="ico">⚠️</span><div>Importes <b>nominales</b>: con inflación, un mes no se compara directo con otro. Mirá sobre todo los <b>porcentajes</b>.</div></div>' : ''}
   <section class="card">${filtrados.length ? tablaAgrupada(ordenar(filtrados, a.orden), a.por, true) : estadoVacio('Sin resultados.')}</section>`;
+}
+// Un único lugar define cada agrupación (lo usan la tabla y el CSV). Para sumar una agrupación nueva, agregala acá y en el selector.
+function gruposAgrupado(ls, por) {
+  switch (por) {
+    case 'sku': return agruparPor(ls, (o) => o.sku);
+    case 'publicacion': return agruparPor(ls, (o) => o.item_id || '(sin id)', (o) => `${o.titulo || ''}`);
+    case 'envio': return agruparPor(ls, (o) => o.tipo_envio || 'Sin dato');
+    case 'tipo': return agruparPor(ls, (o) => ({ gold_special: 'Clásica', gold_pro: 'Premium' }[o.listing_type] || o.listing_type || '—'));
+    case 'zona': return agruparPor(ls.filter((o) => o.tipo_envio === 'Flex'), (o) => zonaLarga(o.zona_logistica));
+    default: return agruparPor(ls, (o) => String(o.mes).slice(0, 7));
+  }
 }
 function tablaAgrupada(filas, por, ordenable) {
   const o = ordenable ? S.agrup.orden : { col: '', dir: 1 };
   const H = (col, l, nm, ay) => ordenable ? th(col, l, o, nm, ay || '') : `<th class="${nm ? 'num' : ''}">${l}${ay || ''}</th>`;
-  const lblClave = { sku: 'SKU', publicacion: 'Publicación', mes: 'Mes', envio: 'Envío', tipo: 'Tipo' }[por];
+  const lblClave = { sku: 'SKU', publicacion: 'Publicación', mes: 'Mes', envio: 'Envío', tipo: 'Tipo', zona: 'Zona' }[por];
+  const conLog = por === 'zona' || por === 'envio';
   return `<div class="tabla-wrap"><table><thead><tr>
     ${H('clave', lblClave)}${por === 'publicacion' ? '<th>Título</th>' : ''}
     ${H('unidades','Unid.',true)}${H('precioProm','Precio prom.',true, ayudaInline('t_pp','Precio cobrado promedio por unidad.','Bruto / unidades.','Ventas ML.'))}
-    ${H('bruto','Bruto',true)}${H('comisionPct','Comisión %',true)}${H('envioProm','Envío/orden',true)}${H('neto','Neto ML',true)}
+    ${H('bruto','Bruto',true)}${H('comisionPct','Comisión %',true)}${H('envioProm','Envío/orden',true)}
+    ${conLog ? H('brownTodo','Logística',true, ayudaInline('t_log', `Lo pagado a ${esc(CONFIG.LOGISTICA_NOMBRE)} por los envíos Flex del grupo.`, 'Tarifa de la zona vigente a la fecha de entrega, repartida entre las líneas de cada orden.', 'Tarifas y zonas de ⚙️ → Logística Flex.')) + H('brownProm','Log./envío',true) : ''}
+    ${H('neto','Neto ML',true)}
     ${H('costo','Costo',true)}${H('margen','Margen',true)}${H('margenPctNeto','% neto',true, ayudaInline('t_mpn','Margen sobre lo que deja ML.','Margen / neto ML (solo líneas con costo).','v_margen_operacion.'))}
     ${H('margenPctPrecio','% precio',true, ayudaInline('t_mpp','Margen sobre el precio cobrado.','Margen / bruto (solo líneas con costo).','v_margen_operacion.'))}
     ${H('margenPorUnidad','Margen/u',true)}${H('neg','Alertas',true)}
@@ -854,7 +969,9 @@ function tablaAgrupada(filas, por, ordenable) {
     <td class="mono">${por === 'mes' ? mesLargo(g.clave) : por === 'publicacion' && g.clave.startsWith('MLA') ? `<a href="${CONFIG.ML_ITEM_URL(g.clave)}" target="_blank" rel="noopener">${esc(g.clave)}</a>` : esc(g.clave)}</td>
     ${por === 'publicacion' ? `<td class="titulo dim" title="${esc(g.label)}">${esc(g.label)}</td>` : ''}
     <td class="num">${num(g.unidades)}</td><td class="num">${plata(g.precioProm)}</td><td class="num">${plata(g.bruto)}</td>
-    <td class="num">${pct(g.comisionPct)}</td><td class="num">${plata(g.envioProm)}</td><td class="num">${plata(g.neto)}</td>
+    <td class="num">${pct(g.comisionPct)}</td><td class="num">${plata(g.envioProm)}</td>
+    ${conLog ? `<td class="num">${g.flex ? plata(g.brownTodo) : '—'}</td><td class="num">${g.flex ? plata(g.brownProm) : '—'}</td>` : ''}
+    <td class="num">${plata(g.neto)}</td>
     <td class="num">${g.conCosto ? plata(g.costo) : '—'}</td><td class="num ${g.margen < 0 ? 'neg' : ''}">${g.conCosto ? plata(g.margen) : '—'}</td>
     <td class="num ${g.margenPctNeto !== null && g.margenPctNeto < n(S.config.umbral_margen_pct || 15) ? 'neg' : ''}">${pct(g.margenPctNeto)}</td><td class="num">${pct(g.margenPctPrecio)}</td>
     <td class="num">${plata(g.margenPorUnidad)}</td>
@@ -1081,7 +1198,7 @@ function vistaCalculadora() {
       <div class="campo"><label>Comisión ML %</label><input id="ccCom" type="number" step="0.1" min="0" max="80" value="${esc(CALC.comision)}"><div class="hint">Clásica ~14%. Premium/cuotas, más.</div></div>
       <div class="campo"><label>Cargo fijo ML $</label><input id="ccFijo" type="number" min="0" value="${esc(CALC.fijo)}"><div class="hint">Costo fijo por unidad en precios bajos.</div></div>
       <div class="campo"><label>Envío a cargo $</label><input id="ccEnv" type="number" min="0" value="${esc(CALC.envio)}"><div class="hint">Promedio esperado por venta.</div></div>
-      <div class="campo"><label>Otros por venta $</label><input id="ccOtros" type="number" min="0" value="${esc(CALC.otros)}"><div class="hint">Brown, embalaje, prorrateo facturas.</div></div>
+      <div class="campo"><label>Otros por venta $</label><input id="ccOtros" type="number" min="0" value="${esc(CALC.otros)}"><div class="hint">Brown, embalaje, facturación ML (promedio del período).</div></div>
       <div class="campo"><label>Objetivo</label><select id="ccModo">
         <option value="pct_neto" ${CALC.modo==='pct_neto'?'selected':''}>% de margen sobre el neto</option>
         <option value="pct_precio" ${CALC.modo==='pct_precio'?'selected':''}>% de margen sobre el precio</option>
@@ -1107,7 +1224,7 @@ function precargarCalcSku(sku) {
     CALC.envio = t.envioProm !== null ? Math.round(t.envioProm) : CALC.envio;
     CALC.fijo = 0;
     // otros por venta = lo que hoy ya descuenta la vista en promedio (Brown + embalaje + facturas)
-    const otros = t.conCosto ? (t.brown + t.embalaje + t.prorrateo) / t.conCosto : 0;
+    const otros = t.conCosto ? (t.brown + t.embalaje + t.prorrateo + t.cargoMl + t.iibbDesc) / t.conCosto : 0;
     CALC.otros = otros ? Math.round(otros) : '';
     toast(`Precargado ${sku}: ${ls.length} ventas del período`, 'ok');
   } else toast('Ese SKU no tiene ventas en el período elegido: completá a mano.', 'err');
@@ -1135,26 +1252,230 @@ function calcularPrecioPiso() {
 }
 
 /* ============================================================
-   16. VISTA: AJUSTES Y FACTURAS ML
+   16. VISTA: AJUSTES · LOGÍSTICA FLEX · FACTURACIÓN ML
+   Sub-secciones: para sumar una nueva, agregala en AJ_SUBS y escribí su función aj<Nombre>().
    ============================================================ */
+const AJ_SUBS = [
+  { id: 'parametros', label: '⚙️ Parámetros', fn: () => ajParametros() },
+  { id: 'logistica', label: '🚚 Logística Flex', fn: () => ajLogistica() },
+  { id: 'facturacion', label: '🧾 Facturación ML', fn: () => ajFacturacion() },
+  { id: 'manuales', label: '✍️ Facturas manuales', fn: () => ajManuales() },
+];
 function vistaAjustes() {
-  const c = S.config || {}; const ro = !S.puedeEditar ? 'disabled' : '';
+  const sub = AJ_SUBS.find((s) => s.id === S.ajSub) || AJ_SUBS[0];
   return `
   ${!S.puedeEditar ? '<div class="aviso warn"><span class="ico">🔒</span><div>Tu usuario puede ver pero no editar los ajustes.</div></div>' : ''}
+  <div class="barra-filtros"><div class="seg">${AJ_SUBS.map((s) => `<button data-ajsub="${s.id}" class="${s.id === sub.id ? 'activo' : ''}">${s.label}</button>`).join('')}</div></div>
+  ${sub.fn()}
+  <div class="mute" style="font-size:11.5px;text-align:center;margin-top:8px">Versión ${CONFIG.APP_VERSION} · usuario ${esc(S.email || '')}</div>`;
+}
+
+/* ---------- 16.1 Parámetros ---------- */
+function ajParametros() {
+  const c = S.config || {}; const ro = !S.puedeEditar ? 'disabled' : '';
+  return `
   <section class="card"><h2>Parámetros del cálculo</h2>
     <div class="form-grid">
       <div class="campo"><label>Umbral de alerta (% s/neto)</label><input id="ajUmbral" type="number" step="0.5" value="${esc(c.umbral_margen_pct ?? 15)}" ${ro}><div class="hint">Debajo de esto la venta queda ▲ Bajo.</div></div>
-      <div class="campo"><label>Brown Flex $ por envío</label><input id="ajBrown" type="number" min="0" value="${esc(c.brown_tarifa_flex ?? '')}" placeholder="pendiente" ${ro}><div class="hint">Solo ventas Flex. Vacío = no se descuenta. Ref. ago-26: CABA $4.417 · E1 $7.702 · E2 $9.264 · E3 $10.737.</div></div>
       <div class="campo"><label>Embalaje $ por orden</label><input id="ajEmb" type="number" min="0" value="${esc(c.embalaje_por_orden ?? '')}" placeholder="no se descuenta" ${ro}></div>
-      <div class="campo"><label>Prorrateo facturas ML</label><select id="ajProrr" ${ro}><option value="" ${!c.prorrateo_criterio?'selected':''}>Pendiente (no prorratear)</option><option value="facturacion" ${c.prorrateo_criterio==='facturacion'?'selected':''}>Por % de facturación</option><option value="unidades" ${c.prorrateo_criterio==='unidades'?'selected':''}>Por unidades</option></select></div>
+      <div class="campo"><label>Prorrateo de cargos ML</label><select id="ajProrr" ${ro}><option value="" ${!c.prorrateo_criterio ? 'selected' : ''}>Pendiente (no prorratear)</option><option value="facturacion" ${c.prorrateo_criterio === 'facturacion' ? 'selected' : ''}>Por % de facturación</option><option value="unidades" ${c.prorrateo_criterio === 'unidades' ? 'selected' : ''}>Por unidades</option></select><div class="hint">Cómo se reparten las facturas manuales entre las ventas.</div></div>
       <div class="campo"><label>Antigüedad máx. del costo (días)</label><input id="ajAntig" type="number" min="1" value="${esc(c.costo_max_antiguedad_dias ?? 120)}" ${ro}><div class="hint">Más viejo = “≈ estimado”.</div></div>
       <div class="campo"><label>Analizar ventas desde</label><input id="ajDesde" type="date" value="${esc(c.desde || '2025-08-01')}" ${ro}><div class="hint">Antes de ago-2025 no hay detalle de comisión/envío.</div></div>
     </div>
+    <div class="mute" style="font-size:11.5px;margin-top:8px">La logística Flex ya no es una tarifa única: se calcula por zona en 🚚 Logística Flex.</div>
     ${S.puedeEditar ? '<div class="acciones"><button class="btn" data-accion="guardarAjustes">Guardar parámetros</button></div>' : ''}
+  </section>`;
+}
+
+/* ---------- 16.2 Logística Flex ---------- */
+const ordenZona = (a, b) => (a === 'CABA' ? -1 : b === 'CABA' ? 1 : String(a).localeCompare(String(b), 'es', { numeric: true }));
+const esProvisoria = (x) => /PROVISORI/i.test(String(x && x.nota || ''));
+function tarifaVigente(tarifas, zona, fecha = hoyAR()) {
+  return tarifas.filter((t) => t.zona === zona && t.vigente_desde <= fecha).sort((a, b) => b.vigente_desde.localeCompare(a.vigente_desde))[0] || null;
+}
+function periodosConciliacion(conc) {
+  const m = new Map();
+  for (const f of conc) {
+    const k = f.desde + '|' + f.hasta;
+    if (!m.has(k)) m.set(k, { desde: f.desde, hasta: f.hasta, filas: [], envLiq: 0, envCalc: 0, totLiq: 0, totCalc: 0, canceladas: 0, sinZona: 0 });
+    const p = m.get(k); p.filas.push(f);
+    p.envLiq += n(f.envios_liquidados); p.envCalc += n(f.envios_calculados);
+    p.totLiq += n(f.total_liquidado); p.totCalc += n(f.envios_calculados) * n(f.tarifa);
+    p.canceladas += n(f.de_ventas_canceladas); p.sinZona = Math.max(p.sinZona, n(f.sin_zona_en_rango));
+  }
+  return [...m.values()].sort((a, b) => b.desde.localeCompare(a.desde)).map((p) => ({ ...p, filas: p.filas.sort((a, b) => ordenZona(a.zona, b.zona)) }));
+}
+function ajLogistica() {
+  if (S.logCargando && !S.logistica) return estadoCarga('Cargando tarifas, zonas y liquidaciones…', S.logInicio);
+  if (S.logError) return estadoError(S.logError, 'recargarLog');
+  if (!S.logistica) return estadoCarga();
+  const L = S.logistica; const LOG = esc(CONFIG.LOGISTICA_NOMBRE); const ed = S.puedeEditar;
+  const tarifas = L.tarifas || [], mapeo = L.mapeo || [], sinZona = L.sin_zona || [];
+  const zonas = [...new Set(tarifas.map((t) => t.zona))].sort(ordenZona);
+  const futuras = tarifas.filter((t) => t.vigente_desde > hoyAR());
+  const hayProvisorio = tarifas.some(esProvisoria) || mapeo.some(esProvisoria);
+  const pers = periodosConciliacion(L.conciliacion || []);
+  const ult = pers[0];
+  const zd = S.config.logistica_zona_default || '';
+  const optZonas = (sel) => zonas.map((z) => `<option value="${esc(z)}" ${z === sel ? 'selected' : ''}>${esc(zonaLarga(z))}</option>`).join('');
+  const lv = S.logVista;
+  const qm = lv.qMapeo.trim().toUpperCase();
+  const mapeoFiltrado = mapeo.filter((m) => !qm || String(m.clave).includes(qm) || String(m.partido || '').includes(qm) || zonaLarga(m.zona).toUpperCase().includes(qm));
+  const liqDesde = lv.liqDesde || '', liqHasta = lv.liqHasta || '';
+  return `
+  ${hayProvisorio ? `<div class="aviso warn"><span class="ico">⏳</span><div><b>Hay datos provisorios.</b> El mapa actual de ${LOG} (Quilmes y Hurlingham pasan a Zona 2) y las tarifas $9.000 / $10.500 / $12.300 están cargados <b>desde el 01/10/2026 hasta que ${LOG} confirme la fecha</b>. Cuando la tengas, cargá de nuevo las tarifas con la fecha correcta y borrá las provisorias.</div></div>` : ''}
+  <div class="kpis">
+    ${zonas.map((z) => { const t = tarifaVigente(tarifas, z); return kpi({ label: `Tarifa ${zonaLarga(z)}`, valor: t ? plata(t.tarifa) : '—', sub: t ? `desde ${fechaCorta(t.vigente_desde)}${esProvisoria(t) ? ' · <span style="color:var(--warn)">provisoria</span>' : ''}` : 'sin tarifa vigente',
+      key: 'l_t_' + z, que: `Lo que cobra ${LOG} hoy por cada envío Flex a ${zonaLarga(z)}.`, calculo: 'La tarifa con la fecha de vigencia más reciente que no sea futura. Cada envío usa la tarifa vigente el día de la entrega.', fuente: 'Tabla logistica_tarifas (se carga abajo con su fecha).' }); }).join('')}
+    ${kpi({ label: 'Envíos sin zona', valor: num(sinZona.length), clase: sinZona.length ? 'neg' : 'pos', sub: sinZona.length ? (zd ? `se cobran como ${esc(zonaLarga(zd))} (estimado)` : 'sin costo logístico') : 'todo mapeado ✓',
+      key: 'l_sz', que: 'Envíos Flex cuyo destino no se pudo ubicar en ninguna zona.', calculo: 'Destino (barrio, localidad o CP) sin coincidencia en el mapeo, o envío sin datos de destino todavía.', fuente: 'v_logistica_sin_zona. Asignales zona abajo y el margen se corrige solo.' })}
+    ${kpi({ label: 'Destinos sincronizados', valor: num(L.destinos?.total), sub: `${L.destinos?.con_error ? num(L.destinos.con_error) + ' con error · ' : ''}última: ${L.destinos?.ultima_sync ? fechaCorta(L.destinos.ultima_sync) + ' ' + String(L.destinos.ultima_sync).slice(11, 16) : '—'}`,
+      key: 'l_ds', que: 'Envíos Flex con el destino ya bajado de Mercado Libre (provincia, localidad, barrio, CP y fecha de entrega).', calculo: 'Se actualiza solo cada 6 horas. No guarda nombre ni dirección del comprador.', fuente: 'API de envíos de ML → tabla ml_envios_destino.' })}
+    ${ult ? kpi({ label: 'Última liquidación', valor: ult.envLiq === ult.envCalc && Math.round(ult.totLiq) === Math.round(ult.totCalc) ? '✓ Cierra' : `${ult.envLiq - ult.envCalc > 0 ? '+' : ''}${num(ult.envLiq - ult.envCalc)} env.`, clase: ult.envLiq === ult.envCalc ? 'pos' : 'neg',
+      sub: `${fechaCorta(ult.desde)} → ${fechaCorta(ult.hasta)} · ${plata(ult.totLiq)}`,
+      key: 'l_ul', que: `Si lo que liquidó ${LOG} en la última quincena coincide con lo que calcula la app.`, calculo: 'Envíos liquidados − envíos calculados (por zona y fecha de entrega en ese rango). ✓ = misma cantidad y mismo total.', fuente: 'Liquidaciones cargadas abajo vs ml_envios_destino + mapeo de zonas.' }) : ''}
+  </div>
+
+  <section class="card"><h2>Envíos sin zona ${ayudaInline('l_cola', 'Cola de envíos Flex que la app no pudo ubicar en el mapa.', 'Elegí qué dato usar (barrio, localidad o CP) y la zona: queda guardado para todos los envíos futuros con ese mismo dato.', 'Mapa de zonas de ' + LOG + '.')}
+    <span class="der">${ed ? `<button class="btn sec chico" data-accion="syncDestinos" ${lv.sync && lv.sync.corriendo ? 'disabled' : ''}>↻ Sincronizar destinos ahora</button>` : ''}</span></h2>
+    <div id="syncDestProg" class="progreso">${lv.sync && lv.sync.corriendo ? progresoHtml(lv.sync) : ''}</div>
+    ${sinZona.length ? `<div class="tabla-wrap"><table><thead><tr><th>Venta</th><th>Orden</th><th>Destino</th><th>Motivo</th>${ed ? '<th>Asignar por</th><th>Zona</th><th></th>' : ''}</tr></thead><tbody>
+      ${sinZona.map((s, i) => { const claves = [s.clave_barrio && ['barrio', s.clave_barrio], s.clave_ciudad && ['localidad', s.clave_ciudad], s.clave_cp && ['CP', s.clave_cp]].filter(Boolean);
+        return `<tr><td>${fechaCorta(s.fecha)}${s.cancelada ? ' <span class="badge b-neutro">cancelada</span>' : ''}</td>
+        <td><a href="${CONFIG.ML_ORDEN_URL(s.ml_order_id)}" target="_blank" rel="noopener" class="mono">${esc(s.ml_order_id)}</a><div class="mute" style="font-size:11px">${esc(s.skus || '')}</div></td>
+        <td style="white-space:normal;min-width:160px">${esc([s.barrio, s.ciudad, s.provincia].filter(Boolean).join(', ') || '—')}${s.cp ? ` · CP ${esc(s.cp)}` : ''}</td>
+        <td>${{ sin_destino: '<span class="badge b-sin">sin destino aún</span>', error_ml: `<span class="badge b-neg" title="${esc(s.error || '')}">error ML</span>`, sin_mapeo: '<span class="badge b-bajo">no está en el mapa</span>' }[s.motivo] || esc(s.motivo)}</td>
+        ${ed ? (claves.length ? `<td><select id="szClave_${i}">${claves.map(([l, k]) => `<option value="${esc(k)}">${l}: ${esc(k)}</option>`).join('')}</select></td>
+          <td><select id="szZona_${i}">${optZonas(zd)}</select></td><td><button class="btn chico" data-accion="asignarZona" data-i="${i}">Asignar</button></td>`
+          : '<td colspan="3" class="mute">Sincronizá destinos para traer el dato</td>') : ''}</tr>`; }).join('')}
+    </tbody></table></div>` : estadoVacio('Todos los envíos Flex tienen zona ✓')}
+    ${ed ? `<div class="form-grid" style="margin-top:12px">
+      <div class="campo"><label>Zona por defecto si falta el dato</label><select id="lgZonaDef"><option value="">Ninguna (costo $0)</option>${optZonas(zd)}</select><div class="hint">Mientras un envío no tenga zona, se cobra con esta tarifa y queda marcado “≈ estimado”. Conviene una zona intermedia.</div></div>
+    </div><div class="acciones"><button class="btn sec chico" data-accion="guardarZonaDef">Guardar zona por defecto</button></div>` : ''}
   </section>
-  <section class="card"><h2>Facturas mensuales de ML ${ayudaInline('f_ml','Cargos de la factura mensual de ML que NO están en la comisión por venta (publicidad, cargos de Full, etc.).','Se reparten entre las ventas del mes según el criterio de prorrateo. Alcance: todo, solo Full/Flex/Colecta o un SKU.','Cuidado con duplicar: la comisión por venta ya está en el neto.')}
+
+  <section class="card"><h2>Tarifas por zona ${ayudaInline('l_tar', `Precio por envío que cobra ${LOG} en cada zona, con historial.`, 'Cada envío toma la tarifa vigente el día de su entrega. Para un aumento, cargá la tarifa nueva con su fecha: las ventas anteriores no cambian.', 'Liquidaciones quincenales y mapa de ' + LOG + '.')}</h2>
+    <div class="tabla-wrap"><table><thead><tr><th>Zona</th><th class="num">Tarifa</th><th>Vigente desde</th><th>Estado</th><th>Nota</th>${ed ? '<th></th>' : ''}</tr></thead><tbody>
+      ${[...tarifas].sort((a, b) => ordenZona(a.zona, b.zona) || b.vigente_desde.localeCompare(a.vigente_desde))
+        .filter((t) => lv.verHist || t.vigente_desde > hoyAR() || (tarifaVigente(tarifas, t.zona) || {}).vigente_desde === t.vigente_desde).map((t) => { const vig = tarifaVigente(tarifas, t.zona);
+        const estado = t.vigente_desde > hoyAR() ? '<span class="badge b-est">futura</span>' : vig && vig.vigente_desde === t.vigente_desde ? '<span class="badge b-ok">vigente</span>' : '<span class="badge b-neutro">histórica</span>';
+        return `<tr><td>${esc(zonaLarga(t.zona))}</td><td class="num">${plata(t.tarifa)}</td><td>${fechaCorta(t.vigente_desde)}</td><td>${estado}${esProvisoria(t) ? ' <span class="badge b-bajo">provisoria</span>' : ''}</td>
+        <td class="dim" style="white-space:normal;max-width:260px">${esc(t.nota || '')}</td>
+        ${ed ? `<td><button class="btn sec chico" data-accion="borrarTarifa" data-zona="${esc(t.zona)}" data-vig="${esc(t.vigente_desde)}" title="Borrar">🗑</button></td>` : ''}</tr>`; }).join('')}
+    </tbody></table></div>
+    <div class="acciones" style="margin-top:6px">${futuras.length ? `<span class="mute" style="font-size:11.5px">${num(futuras.length)} tarifa(s) futura(s): se aplican solas cuando llegue la fecha.</span>` : ''}
+      <span style="flex:1"></span><button class="chip-btn" data-accion="toggleHistTarifas">${lv.verHist ? 'Ocultar historial' : `Ver historial (${num(tarifas.filter((t) => t.vigente_desde <= hoyAR() && (tarifaVigente(tarifas, t.zona) || {}).vigente_desde !== t.vigente_desde).length)})`}</button></div>
+    ${ed ? `<div class="form-grid" style="margin-top:12px">
+      <div class="campo"><label>Zona</label><select id="trZona">${optZonas('')}<option value="__nueva">Otra zona nueva…</option></select></div>
+      <div class="campo"><label>Nombre (si es nueva)</label><input id="trZonaNueva" placeholder="Ej: Esfera 4"></div>
+      <div class="campo"><label>Tarifa $ por envío</label><input id="trTarifa" type="number" min="0" step="1"></div>
+      <div class="campo"><label>Vigente desde</label><input id="trVig" type="date" value="${hoyAR()}"></div>
+      <div class="campo"><label>Nota</label><input id="trNota" placeholder="Ej: aumento oct-26 confirmado"></div>
+    </div><div class="acciones"><button class="btn" data-accion="guardarTarifa">Guardar tarifa</button></div>` : ''}
+  </section>
+
+  <section class="card"><h2>Liquidaciones quincenales y conciliación ${ayudaInline('l_liq', `Cargás lo que te liquidó ${LOG} cada quincena y la app lo compara con los envíos que calcula.`, 'Envíos calculados = envíos Flex entregados en ese rango de fechas cuyo destino cae en la zona (incluye ventas canceladas que igual viajaron). Total calculado = calculados × tarifa liquidada.', 'Liquidación de ' + LOG + ' + ml_envios_destino + mapeo de zonas.')}</h2>
+    ${pers.length ? pers.map((p) => { const cierra = p.envLiq === p.envCalc && Math.round(p.totLiq) === Math.round(p.totCalc);
+      return `<div style="margin-bottom:14px">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px"><b>${fechaCorta(p.desde)} → ${fechaCorta(p.hasta)}</b>
+        ${cierra ? '<span class="badge b-ok">✓ cierra</span>' : `<span class="badge b-neg">✕ diferencia ${plata(p.totLiq - p.totCalc, true)}</span>`}
+        <span class="dim" style="font-size:12px">liquidado ${plata(p.totLiq)} · calculado ${plata(p.totCalc)}${p.canceladas ? ` · ${num(p.canceladas)} de ventas canceladas` : ''}${p.sinZona ? ` · <span style="color:var(--warn)">${num(p.sinZona)} sin zona en el rango</span>` : ''}</span>
+        <span style="flex:1"></span>${ed ? `<button class="btn sec chico" data-accion="borrarLiq" data-desde="${p.desde}" data-hasta="${p.hasta}">🗑 Borrar</button>` : ''}</div>
+      <div class="tabla-wrap"><table><thead><tr><th>Zona</th><th class="num">Liquidados</th><th class="num">Calculados</th><th class="num">Dif.</th><th class="num">Tarifa</th><th class="num">Total liquidado</th><th class="num">De canceladas</th></tr></thead><tbody>
+        ${p.filas.map((f) => { const d = n(f.envios_liquidados) - n(f.envios_calculados);
+          return `<tr><td>${esc(zonaLarga(f.zona))}</td><td class="num">${num(f.envios_liquidados)}</td><td class="num">${num(f.envios_calculados)}</td>
+          <td class="num ${d ? 'neg' : 'mute'}">${d ? (d > 0 ? '+' : '') + num(d) : '0'}</td><td class="num">${plata(f.tarifa)}</td><td class="num">${plata(f.total_liquidado)}</td><td class="num">${f.de_ventas_canceladas ? num(f.de_ventas_canceladas) : '—'}</td></tr>`; }).join('')}
+      </tbody></table></div></div>`; }).join('') : estadoVacio('Todavía no cargaste ninguna liquidación.')}
+    ${ed ? `<h2 style="margin-top:6px">Cargar liquidación</h2>
+      <div class="form-grid">
+        <div class="campo"><label>Desde</label><input id="lqDesde" type="date" value="${esc(liqDesde)}"></div>
+        <div class="campo"><label>Hasta</label><input id="lqHasta" type="date" value="${esc(liqHasta)}"></div>
+      </div>
+      <div class="tabla-wrap" style="margin-top:10px"><table><thead><tr><th>Zona</th><th class="num">Envíos</th><th class="num">Tarifa $</th></tr></thead><tbody>
+        ${zonas.map((z, i) => { const t = tarifaVigente(tarifas, z, liqDesde || hoyAR());
+          return `<tr><td>${esc(zonaLarga(z))}<input type="hidden" id="lqZona_${i}" value="${esc(z)}"></td>
+          <td class="num"><input id="lqEnv_${i}" type="number" min="0" step="1" placeholder="0" style="width:90px;text-align:right"></td>
+          <td class="num"><input id="lqTar_${i}" type="number" min="0" step="1" value="${t ? Math.round(t.tarifa) : ''}" style="width:110px;text-align:right"></td></tr>`; }).join('')}
+      </tbody></table></div>
+      <div class="hint mute" style="font-size:11.5px;margin-top:6px">La tarifa se precarga con la vigente en la fecha “desde”; corregila si la liquidación dice otra cosa. Zonas con 0 envíos se guardan igual (sirve para controlar).</div>
+      <div class="acciones"><button class="btn" data-accion="guardarLiq">Guardar liquidación</button></div>` : ''}
+  </section>
+
+  <section class="card"><h2>Mapa de zonas ${ayudaInline('l_map', `Qué zona de ${LOG} le corresponde a cada barrio, localidad o código postal.`, 'Para cada envío se busca primero el barrio, después la localidad y por último el CP. CABA es siempre CABA. Un mismo lugar puede cambiar de zona desde una fecha (historial).', `Mapa de ${LOG} (fuente: mapa_2024 / mapa_2026 / validado con liquidación / supuesto / manual).`)}
+    <span class="der dim">${num(mapeo.length)} reglas</span></h2>
+    <div class="barra-filtros" style="margin-bottom:10px"><input id="mapQ" placeholder="Buscar localidad, partido, CP o zona…" value="${esc(lv.qMapeo)}" style="flex:1;min-width:160px"></div>
+    <div class="tabla-wrap" style="max-height:420px;overflow:auto"><table><thead><tr><th>Barrio / localidad / CP</th><th>Partido</th><th>Zona</th><th>Desde</th><th>Fuente</th>${ed ? '<th></th>' : ''}</tr></thead><tbody>
+      ${mapeoFiltrado.slice(0, 300).map((m) => `<tr><td class="mono">${esc(m.clave)}</td><td class="dim">${esc(m.partido || '—')}</td><td>${esc(zonaLarga(m.zona))}</td>
+        <td>${m.vigente_desde && m.vigente_desde > '2000-01-01' ? fechaCorta(m.vigente_desde) + (esProvisoria(m) ? ' <span class="badge b-bajo">provisoria</span>' : '') : '<span class="mute">siempre</span>'}</td>
+        <td><span class="badge ${m.fuente === 'validado' ? 'b-ok' : m.fuente === 'supuesto' ? 'b-bajo' : 'b-neutro'}">${esc(m.fuente || '—')}</span></td>
+        ${ed ? `<td><button class="btn sec chico" data-accion="borrarZona" data-id="${m.id}" title="Borrar">🗑</button></td>` : ''}</tr>`).join('')}
+    </tbody></table></div>
+    ${mapeoFiltrado.length > 300 ? `<div class="mute" style="font-size:11.5px;margin-top:6px">Mostrando 300 de ${num(mapeoFiltrado.length)}: afiná la búsqueda.</div>` : ''}
+    ${ed ? `<div class="form-grid" style="margin-top:12px">
+      <div class="campo"><label>Barrio, localidad o CP</label><input id="mzClave" placeholder="Ej: Villa Celina o CP:1774"></div>
+      <div class="campo"><label>Zona</label><select id="mzZona">${optZonas('')}</select></div>
+      <div class="campo"><label>Desde (opcional)</label><input id="mzVig" type="date"><div class="hint">Vacío = desde siempre. Con fecha = cambio de zona a partir de ese día.</div></div>
+      <div class="campo"><label>Partido (opcional)</label><input id="mzPartido" placeholder="Ej: La Matanza"></div>
+    </div><div class="acciones"><button class="btn sec" data-accion="guardarZonaManual">Agregar al mapa</button></div>` : ''}
+  </section>`;
+}
+
+/* ---------- 16.3 Facturación ML ---------- */
+function ajFacturacion() {
+  if (S.facCargando && !S.facturacion) return estadoCarga('Cargando facturación de ML…', S.facInicio);
+  if (S.facError) return estadoError(S.facError, 'recargarFac');
+  if (!S.facturacion) return estadoCarga();
+  const F = S.facturacion; const ps = F.periodos || []; const ed = S.puedeEditar;
+  const trat = S.config.iibb_tratamiento || 'pendiente';
+  const cerrado = ps.find((p) => String(p.estado || '').toUpperCase() === 'CLOSED') || ps[0];
+  const rango = (p) => `${fechaCorta(p.fecha_desde)} → ${fechaCorta(p.fecha_hasta)}`;
+  const conc = F.conceptos || [];
+  const sel = ps.find((p) => p.periodo_key === S.facKey);
+  return `
+  <div class="kpis">
+    ${cerrado ? kpi({ label: 'Factura ML (último cerrado)', valor: plata(cerrado.factura_total), sub: rango(cerrado), key: 'f_tot', que: 'Total de la factura mensual de ML del último período cerrado.', calculo: 'Período de ML: del 17 de un mes al 16 del siguiente.', fuente: 'API de facturación de ML (sync diaria).' }) : ''}
+    ${cerrado ? kpi({ label: 'Descontado de las ventas', valor: plata(cerrado.descontado_ventas), sub: 'comisiones y envíos ya en el neto', key: 'f_desc', que: 'Parte de la factura que ML ya te cobró al liquidar cada venta.', calculo: 'payment_collected.operation_discount. NO se vuelve a restar: ya está en el neto de cada operación.', fuente: 'API de facturación de ML.' }) : ''}
+    ${cerrado ? kpi({ label: 'Cobrado aparte', valor: plata(cerrado.cobrado_aparte), clase: 'neg', sub: 'lo que se paga fuera de las ventas', key: 'f_ap', que: 'Lo que ML cobra por fuera de las ventas (tarjeta / saldo): percepciones, cargos de servicios, etc.', calculo: 'Factura total − descontado de las ventas.', fuente: 'API de facturación de ML.' }) : ''}
+    ${cerrado ? kpi({ label: 'Percepciones IIBB', valor: plata(cerrado.iibb_percepciones), sub: { pendiente: '❓ sin descontar del margen', costo: 'se descuentan del margen', computable: 'pago a cuenta (no se descuentan)' }[trat], key: 'f_iibb', que: 'Percepciones de Ingresos Brutos que ML incluye en su factura.', calculo: 'Cargos de los grupos de impuestos − bonificaciones de percepciones en notas de crédito.', fuente: 'API de facturación de ML.' }) : ''}
+    ${cerrado ? kpi({ label: 'Bonificación Flex', valor: plata(cerrado.flex_cashback), clase: 'pos', sub: 'se imputa a cada orden Flex', key: 'f_flex', que: 'Lo que ML te devuelve por los envíos Flex (bonificación por usar logística propia).', calculo: 'Σ bonificaciones Flex (notas de crédito) − Σ cargos Flex de la factura.', fuente: 'Detalle Flex por orden de la API de facturación.' }) : ''}
+  </div>
+
+  <section class="card"><h2>Percepciones de IIBB ${ayudaInline('f_trat', 'Definí con el contador cómo tratar las percepciones de Ingresos Brutos que cobra ML.', 'Costo: se restan del margen de cada venta (prorrateadas por facturación). Pago a cuenta: no se restan porque las descontás en la DDJJ de IIBB. Pendiente: no se restan pero la app muestra cuánto bajaría el margen.', 'Config margenes_config.iibb_tratamiento.')}</h2>
+    <div class="form-grid"><div class="campo" style="grid-column:1/-1;max-width:420px"><label>Tratamiento</label><select id="fiTrat" ${ed ? '' : 'disabled'}>
+      <option value="pendiente" ${trat === 'pendiente' ? 'selected' : ''}>❓ Pendiente (no descontar, avisar)</option>
+      <option value="costo" ${trat === 'costo' ? 'selected' : ''}>Costo (descontar del margen)</option>
+      <option value="computable" ${trat === 'computable' ? 'selected' : ''}>Pago a cuenta (no descontar)</option></select></div></div>
+    ${ed ? '<div class="acciones"><button class="btn sec chico" data-accion="guardarIibb">Guardar tratamiento</button></div>' : ''}
+  </section>
+
+  <section class="card"><h2>Períodos sincronizados ${ayudaInline('f_per', 'Facturas mensuales de ML bajadas por API. Tocá un período para ver sus conceptos.', 'Se sincronizan solas todos los días (período abierto + último cerrado). El botón fuerza la sync ahora.', 'Edge Function ml-billing-sync → ml_facturacion_periodos / _conceptos / _flex.')}
+    <span class="der">${ed ? `<button class="btn sec chico" data-accion="syncBilling" ${S.facSync ? 'disabled' : ''}>↻ Sincronizar ahora</button>` : ''}</span></h2>
+    <div id="facSyncProg" class="progreso">${S.facSync ? progresoHtml(S.facSync) : ''}</div>
+    ${ps.length ? `<div class="tabla-wrap"><table><thead><tr><th>Período</th><th>Estado</th><th class="num">Factura</th><th class="num">Descontado ventas</th><th class="num">Cobrado aparte</th><th class="num">IIBB</th><th class="num">Otros cargos</th><th class="num">Bonif. NC</th><th class="num">Flex</th><th>Sync</th></tr></thead><tbody>
+      ${ps.map((p) => `<tr class="click" data-accion="verConceptos" data-key="${esc(p.periodo_key)}" style="${p.periodo_key === S.facKey ? 'background:var(--brand-soft)' : ''}">
+        <td><b>${mesLargo(p.periodo_key)}</b> <span class="mute" style="font-size:11px">${rango(p)}</span></td>
+        <td>${String(p.estado || '').toUpperCase() === 'CLOSED' ? '<span class="badge b-neutro">cerrado</span>' : '<span class="badge b-est">abierto</span>'}</td>
+        <td class="num">${plata(p.factura_total)}</td><td class="num">${plata(p.descontado_ventas)}</td><td class="num">${plata(p.cobrado_aparte)}</td>
+        <td class="num">${plata(p.iibb_percepciones)}</td><td class="num">${plata(p.otros_cargos_aparte)}</td><td class="num">${plata(p.bonif_notas_credito)}</td><td class="num pos">${plata(p.flex_cashback)}</td>
+        <td class="mute">${p.synced_at ? fechaCorta(p.synced_at) : '—'}</td></tr>`).join('')}
+    </tbody></table></div>` : estadoVacio('Todavía no hay períodos sincronizados. Tocá “Sincronizar ahora”.')}
+  </section>
+
+  ${sel ? `<section class="card"><h2>Conceptos de ${mesLargo(sel.periodo_key)} <span class="der dim">${rango(sel)}</span></h2>
+    ${S.facCargando ? estadoCarga('Cargando conceptos…') : conc.length ? `<div class="tabla-wrap" style="max-height:440px;overflow:auto"><table><thead><tr><th>Concepto</th><th>Grupo</th><th>Tipo</th><th>Documento</th><th class="num">Monto</th></tr></thead><tbody>
+      ${conc.map((c) => `<tr><td style="white-space:normal">${esc(c.etiqueta || c.tipo)}</td><td class="dim">${esc(c.grupo || '—')}</td>
+        <td>${c.clase === 'bonificacion' ? '<span class="badge b-ok">bonificación</span>' : '<span class="badge b-neutro">cargo</span>'}</td><td class="dim">${c.documento === 'CREDIT_NOTE' ? 'Nota de crédito' : 'Factura'}</td>
+        <td class="num ${c.clase === 'bonificacion' ? 'pos' : ''}">${plata(c.monto)}</td></tr>`).join('')}
+    </tbody></table></div>` : estadoVacio('Sin conceptos para este período.')}
+  </section>` : ''}`;
+}
+
+/* ---------- 16.4 Facturas manuales (cargos que la API no trae) ---------- */
+function ajManuales() {
+  return `
+  <section class="card"><h2>Facturas mensuales manuales ${ayudaInline('f_ml', 'Cargos extra que quieras sumar a mano (opcional: la facturación de ML ya entra sola por API).', 'Se reparten entre las ventas del mes según el criterio de prorrateo. Alcance: todo, solo Full/Flex/Colecta o un SKU.', 'Cuidado con duplicar: la comisión por venta y la factura de ML ya están contempladas.')}
     <span class="der"><button class="chip-btn" data-accion="recargarFacturas">↻</button></span></h2>
-    <div id="facturasLista">${estadoCarga('Cargando facturas…')}</div>
+    <div id="facturasLista">${S.facManuales ? facturasManualesHtml(S.facManuales) : estadoCarga('Cargando facturas…')}</div>
     ${S.puedeEditar ? `<div class="form-grid" style="margin-top:12px">
       <div class="campo"><label>Mes</label><input id="fcPeriodo" type="month" value="${hoyAR().slice(0, 7)}"></div>
       <div class="campo"><label>Concepto</label><input id="fcConcepto" placeholder="Ej: Publicidad Product Ads"></div>
@@ -1162,20 +1483,111 @@ function vistaAjustes() {
       <div class="campo"><label>Alcance</label><select id="fcAlcance"><option value="todo">Todas las ventas</option><option value="full">Solo Full</option><option value="flex">Solo Flex</option><option value="colecta">Solo Colecta</option><option value="sku">Un SKU</option></select></div>
       <div class="campo"><label>SKU (si alcance = SKU)</label><input id="fcSku"></div>
     </div><div class="acciones"><button class="btn sec" data-accion="guardarFactura">Agregar concepto</button></div>` : ''}
-  </section>
-  <div class="mute" style="font-size:11.5px;text-align:center">Versión ${CONFIG.APP_VERSION} · usuario ${esc(S.email || '')}</div>`;
+  </section>`;
 }
-async function pintarFacturas() {
-  const el = $('facturasLista'); if (!el) return;
+function facturasManualesHtml(fs) {
+  return fs.length ? `<div class="tabla-wrap"><table><thead><tr><th>Mes</th><th>Concepto</th><th>Alcance</th><th class="num">Importe</th><th></th></tr></thead><tbody>
+    ${fs.map((f) => `<tr><td>${mesLargo(f.periodo)}</td><td>${esc(f.concepto)}</td><td>${esc(f.alcance)}${f.sku ? ' · ' + esc(f.sku) : ''}</td><td class="num">${plata(f.importe)}</td>
+    <td>${S.puedeEditar ? `<button class="btn sec chico" data-accion="borrarFactura" data-id="${f.id}">🗑</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`
+    : estadoVacio('No hay facturas manuales: la facturación de ML ya entra sola por API.');
+}
+async function pintarFacturas(forzar = false) {
+  if (S.facManuales && !forzar) return;
   try {
-    const r = await api('facturas'); const fs = r.filas || [];
-    if (!$('facturasLista')) return;
-    $('facturasLista').innerHTML = fs.length ? `<div class="tabla-wrap"><table><thead><tr><th>Mes</th><th>Concepto</th><th>Alcance</th><th class="num">Importe</th><th></th></tr></thead><tbody>
-      ${fs.map((f) => `<tr><td>${mesLargo(f.periodo)}</td><td>${esc(f.concepto)}</td><td>${esc(f.alcance)}${f.sku ? ' · ' + esc(f.sku) : ''}</td><td class="num">${plata(f.importe)}</td>
-      <td>${S.puedeEditar ? `<button class="btn sec chico" data-accion="borrarFactura" data-id="${f.id}">🗑</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`
-      : estadoVacio('Todavía no hay facturas cargadas. Pegá los conceptos de la factura de septiembre como primer caso.');
-  } catch (e) { if ($('facturasLista')) $('facturasLista').innerHTML = estadoError(e.message, 'recargarFacturas'); }
+    const r = await api('facturas'); S.facManuales = r.filas || [];
+    pintar('facturasLista', facturasManualesHtml(S.facManuales));
+  } catch (e) { pintar('facturasLista', estadoError(e.message, 'recargarFacturas')); }
 }
+
+/* ---------- 16.5 Acciones de logística y facturación ---------- */
+async function syncDestinos() {
+  const lv = S.logVista; if (lv.sync && lv.sync.corriendo) return;
+  lv.sync = { corriendo: true, etiqueta: 'Sincronizando destinos Flex', hechos: 0, total: null, t0: Date.now(), estimadoSeg: 15 };
+  render();
+  const tick = setInterval(() => pintar('syncDestProg', progresoHtml(lv.sync)), 1000);
+  let errores = 0;
+  try {
+    for (let i = 0; i < CONFIG.DESTINOS_MAX_TANDAS; i++) {
+      const r = await api('destinos_sync', {}, { timeout: 125000, reintentos: 0 });
+      errores += n(r.errores);
+      if (lv.sync.total === null) lv.sync.total = n(r.procesadas) + n(r.pendientes_restantes);
+      lv.sync.hechos += n(r.procesadas);
+      pintar('syncDestProg', progresoHtml(lv.sync));
+      if (!n(r.pendientes_restantes) || !n(r.procesadas)) break;
+    }
+    toast(lv.sync.total ? `✓ ${num(lv.sync.hechos)} destinos actualizados${errores ? ` · ${errores} con error` : ''}` : '✓ Ya estaba todo sincronizado', errores ? 'err' : 'ok');
+  } catch (e) { toast('⚠️ Sync de destinos: ' + e.message, 'err'); }
+  finally { clearInterval(tick); lv.sync = null; }
+  S.ops = null; await cargarLogistica(true);
+}
+async function syncBilling() {
+  if (S.facSync) return;
+  S.facSync = { etiqueta: 'Sincronizando facturación ML (2 períodos)', t0: Date.now(), estimadoSeg: CONFIG.BILLING_SYNC_SEG_ESTIMADOS };
+  render();
+  const tick = setInterval(() => pintar('facSyncProg', progresoHtml(S.facSync)), 1000);
+  try {
+    const r = await api(null, { periodos: 2 }, { fn: CONFIG.FN_BILLING_SYNC, timeout: CONFIG.BILLING_SYNC_TIMEOUT_MS, reintentos: 0 });
+    toast(`✓ Facturación sincronizada: ${(r.periodos || []).map((p) => mesLargo(p.key)).join(', ') || 'sin cambios'}`, 'ok');
+  } catch (e) {
+    const parcial = e.data && e.data.periodos && e.data.periodos.length;
+    toast(`⚠️ ${parcial ? 'Sync parcial: ' : ''}${e.data && e.data.errores && e.data.errores[0] ? e.data.errores[0].error : e.message}`, 'err');
+  } finally { clearInterval(tick); S.facSync = null; }
+  S.ops = null; await cargarFacturacion(true);
+}
+// Tras cualquier cambio de logística: el margen de las ventas Flex cambia → se recalcula al volver a Resumen
+async function trasCambioLogistica(msg) { toast(msg, 'ok'); S.ops = null; await cargarLogistica(true); }
+async function accionLogistica(acc, b) {
+  switch (acc) {
+    case 'asignarZona': {
+      const i = b.dataset.i; const clave = $('szClave_' + i)?.value, zona = $('szZona_' + i)?.value;
+      if (!clave || !zona) { toast('Elegí el dato y la zona', 'err'); return; }
+      await api('zona_guardar', { clave, zona, nota: 'asignada desde la cola sin zona' });
+      return trasCambioLogistica(`✓ ${clave} → ${zonaLarga(zona)}`);
+    }
+    case 'guardarZonaManual': {
+      const clave = $('mzClave').value.trim(), zona = $('mzZona').value, vig = $('mzVig').value, partido = $('mzPartido').value.trim();
+      if (!clave || !zona) { toast('Completá lugar y zona', 'err'); return; }
+      await api('zona_guardar', { clave, zona, vigente_desde: vig || null, partido: partido || null });
+      return trasCambioLogistica(`✓ ${clave} agregado al mapa`);
+    }
+    case 'borrarZona':
+      return confirmar('Se borra esta regla del mapa de zonas. Los envíos que la usaban pueden quedar “sin zona”.', async () => { await api('zona_borrar', { id: Number(b.dataset.id) }); await trasCambioLogistica('Regla borrada'); }, 'Borrar');
+    case 'guardarZonaDef': {
+      const r = await api('config_guardar', { logistica_zona_default: $('lgZonaDef').value || null });
+      S.config = r.config; return trasCambioLogistica('✓ Zona por defecto guardada');
+    }
+    case 'guardarTarifa': {
+      let zona = $('trZona').value; if (zona === '__nueva') zona = $('trZonaNueva').value.trim();
+      const tarifa = parsearNumero($('trTarifa').value), vig = $('trVig').value;
+      if (!zona || !(tarifa >= 0) || !vig) { toast('Completá zona, tarifa y fecha', 'err'); return; }
+      return confirmar(`Se guarda <b>${esc(zonaLarga(zona))} = ${plata(tarifa)}</b> desde el <b>${fechaCorta(vig)}</b>. Cambia el costo logístico de los envíos entregados desde esa fecha (si ya existía una tarifa con esa misma fecha, se reemplaza).`,
+        async () => { await api('tarifa_guardar', { zona, tarifa, vigente_desde: vig, nota: $('trNota').value }); await trasCambioLogistica('✓ Tarifa guardada'); }, 'Guardar tarifa');
+    }
+    case 'borrarTarifa':
+      return confirmar(`Se borra la tarifa de <b>${esc(zonaLarga(b.dataset.zona))}</b> vigente desde ${fechaCorta(b.dataset.vig)}. Los envíos de esas fechas pasan a usar la tarifa anterior.`,
+        async () => { await api('tarifa_borrar', { zona: b.dataset.zona, vigente_desde: b.dataset.vig }); await trasCambioLogistica('Tarifa borrada'); }, 'Borrar');
+    case 'guardarLiq': {
+      const desde = $('lqDesde').value, hasta = $('lqHasta').value;
+      if (!desde || !hasta || hasta < desde) { toast('Rango de fechas inválido', 'err'); return; }
+      const filas = []; let i = 0;
+      while ($('lqZona_' + i)) {
+        const env = $('lqEnv_' + i).value === '' ? 0 : parsearNumero($('lqEnv_' + i).value), tar = parsearNumero($('lqTar_' + i).value);
+        if (!Number.isInteger(env) || env < 0 || !(tar >= 0)) { toast(`Revisá la fila de ${zonaLarga($('lqZona_' + i).value)}`, 'err'); return; }
+        filas.push({ zona: $('lqZona_' + i).value, envios: env, tarifa: tar }); i++;
+      }
+      const total = filas.reduce((a, f) => a + f.envios * f.tarifa, 0);
+      return confirmar(`Se guarda la liquidación del <b>${fechaCorta(desde)}</b> al <b>${fechaCorta(hasta)}</b>: ${num(filas.reduce((a, f) => a + f.envios, 0))} envíos por <b>${plata(total)}</b>. No cambia el margen: sirve para controlar contra lo calculado.`,
+        async () => { await api('liquidacion_guardar', { desde, hasta, filas }); S.logVista.liqDesde = ''; S.logVista.liqHasta = ''; await trasCambioLogistica('✓ Liquidación guardada'); }, 'Guardar');
+    }
+    case 'borrarLiq':
+      return confirmar(`Se borra la liquidación del ${fechaCorta(b.dataset.desde)} al ${fechaCorta(b.dataset.hasta)}.`, async () => { await api('liquidacion_borrar', { desde: b.dataset.desde, hasta: b.dataset.hasta }); await trasCambioLogistica('Liquidación borrada'); }, 'Borrar');
+    case 'guardarIibb': {
+      const r = await api('config_guardar', { iibb_tratamiento: $('fiTrat').value });
+      S.config = r.config; S.ops = null; toast('✓ Tratamiento de IIBB guardado: el margen se recalcula', 'ok'); render(); return;
+    }
+  }
+}
+const ACCIONES_LOGISTICA = ['asignarZona', 'guardarZonaManual', 'borrarZona', 'guardarZonaDef', 'guardarTarifa', 'borrarTarifa', 'guardarLiq', 'borrarLiq', 'guardarIibb'];
 
 /* ============================================================
    17. MODAL + FUNCIONAMIENTO
@@ -1195,6 +1607,9 @@ function abrirFuncionamiento() {
     <li><b>Ventas:</b> las órdenes de ML que ya se sincronizan solas (precio de lista, precio cobrado, comisión, envío, neto). Se excluyen las canceladas.</li>
     <li><b>Costo de mercadería:</b> la última <b>compra con precio</b> anterior a la venta (planilla de compras). Para BBA: lista × 1,21 × 0,96 (4% propio, sin el 5% de pronto pago). Si cargaste un <b>costo manual</b> más nuevo, manda ese. Si no hay nada, se usa el <b>maestro</b> (Excel) y se marca “≈ estimado”.</li>
     <li><b>Kits</b> (ej. 49x4): suma de sus componentes × cantidad.</li>
+    <li><b>Logística Flex (${esc(CONFIG.LOGISTICA_NOMBRE)}):</b> solo para ventas Flex. La app baja de ML el <b>destino</b> de cada envío (provincia, localidad, barrio, CP y fecha de entrega — nunca nombre ni dirección) cada 6 horas, lo ubica en una <b>zona</b> (CABA, Zona 1, 2 o 3) con el mapa de zonas, y le aplica la <b>tarifa vigente el día de la entrega</b>. Si una orden tiene varios productos, el envío se reparte entre ellos.</li>
+    <li><b>Facturación de ML:</b> la factura mensual de ML (período del 17 al 16) se baja sola todos los días. Lo que ML ya descontó en cada venta (comisión, envío) <b>no se vuelve a restar</b>; lo que cobra aparte (cargos de servicios, menos bonificaciones y la devolución Flex) se reparte entre las ventas del período según lo que facturó cada una.</li>
+    <li><b>Percepciones de IIBB:</b> vienen en la factura de ML. Hoy están en “❓ pendiente”: se muestran pero no se restan hasta que el contador defina si son costo o pago a cuenta.</li>
     <li>Nada de esta app modifica Mercado Libre.</li></ul>
   <h4>Semáforo</h4><ul>
     <li>${badgeSem('ok')} margen ≥ umbral · ${badgeSem('bajo')} margen positivo pero bajo el umbral (${pct(S.config.umbral_margen_pct ?? 15)} del neto) · ${badgeSem('negativo')} perdés plata · ${badgeSem('sin_costo')} falta el costo.</li>
@@ -1207,9 +1622,14 @@ function abrirFuncionamiento() {
     <li><b>💲 Costos:</b> costo real de hoy por SKU vs el maestro; pegá la <b>lista nueva de un proveedor</b> (SKU + precio) para actualizar costos sin esperar la próxima compra; reglas por proveedor.</li>
     <li><b>🏷️ Stock valorizado:</b> cuánta plata hay en mercadería (propio + Full) a costo real y qué rota lento.</li>
     <li><b>🧮 Precio piso:</b> dado costo, comisión, envío y margen objetivo, el precio mínimo y el de lista sugerido si aplicás una promo.</li>
-    <li><b>⚙️ Ajustes:</b> umbral de alerta, Brown, embalaje, criterio de prorrateo y las facturas mensuales de ML.</li></ul>
+    <li><b>⚙️ Ajustes · Logística · Facturación</b>, con 4 secciones:
+      <ul><li><b>Parámetros:</b> umbral de alerta, embalaje, criterio de prorrateo, antigüedad máxima del costo.</li>
+      <li><b>🚚 Logística Flex:</b> tarifas por zona con fecha de vigencia (un aumento se carga con su fecha y no toca las ventas viejas); la <b>cola de envíos sin zona</b> para asignarles zona con dos clics; las <b>liquidaciones quincenales</b> de ${esc(CONFIG.LOGISTICA_NOMBRE)} y su <b>conciliación</b> (✓ si lo liquidado coincide con lo calculado); y el <b>mapa de zonas</b> completo, donde podés sumar localidades o CP.</li>
+      <li><b>🧾 Facturación ML:</b> los períodos de factura de ML, sus conceptos, el botón para sincronizar ya y el tratamiento de las percepciones de IIBB.</li>
+      <li><b>✍️ Facturas manuales:</b> para sumar a mano algún cargo que la API no traiga (opcional).</li></ul></li></ul>
+  <h4>Envíos de ventas canceladas</h4><p>Si una venta Flex se cancela después de despachar, ${esc(CONFIG.LOGISTICA_NOMBRE)} cobra el viaje igual. Como no hay venta a la que cargárselo, aparece aparte: KPI “Envíos de ventas canceladas” y al final de la cascada del período (“Margen del período”).</p>
   <h4>Qué todavía NO incluye el margen</h4><ul>
-    <li>Brown Flex, embalaje y facturas mensuales de ML hasta que los configures.</li>
+    <li>Embalaje, hasta que lo cargues en Parámetros. Percepciones de IIBB mientras estén en “pendiente”.</li>
     <li>Retenciones/impuestos que descuenta Mercado Pago y devoluciones (fase de conciliación).</li>
     <li>Gastos fijos del negocio: esto es <b>margen de contribución</b>, no ganancia neta.</li></ul>
   <h4>Ojo con la inflación</h4><p>Todos los importes son <b>nominales en pesos</b>. Para comparar meses mirá los <b>porcentajes</b>, no los montos.</p>
@@ -1237,6 +1657,8 @@ document.addEventListener('click', async (ev) => {
   const ir = t.closest('[data-ir]'); if (ir) { S.tab = ir.dataset.ir; guardarPrefs(); render(); asegurarDatos(); return; }
   const per = t.closest('[data-periodo]'); if (per) { S.periodo = per.dataset.periodo; guardarPrefs(); renderBarraPeriodo(); if (S.periodo !== 'custom') cargarOps(); return; }
   const ag = t.closest('[data-agrup]'); if (ag) { S.agrup.por = ag.dataset.agrup; guardarPrefs(); render(); return; }
+  const ajs = t.closest('[data-ajsub]'); if (ajs) { S.ajSub = ajs.dataset.ajsub; guardarPrefs(); render(); asegurarDatos(); return; }
+  const irAj = t.closest('[data-ir-aj]'); if (irAj) { ev.preventDefault(); S.tab = 'ajustes'; S.ajSub = irAj.dataset.irAj; guardarPrefs(); render(); window.scrollTo(0, 0); asegurarDatos(); return; }
   const thO = t.closest('th[data-orden]');
   if (thO && !t.closest('.ayuda')) {
     const col = thO.dataset.orden;
@@ -1248,17 +1670,24 @@ document.addEventListener('click', async (ev) => {
   const b = t.closest('[data-accion]'); if (!b) return;
   const acc = b.dataset.accion;
   try {
+    if (ACCIONES_LOGISTICA.includes(acc)) { await accionLogistica(acc, b); return; }
     switch (acc) {
+      case 'recargarLog': await cargarLogistica(true); break;
+      case 'toggleHistTarifas': S.logVista.verHist = !S.logVista.verHist; render(); break;
+      case 'recargarFac': await cargarFacturacion(true); break;
+      case 'syncDestinos': await syncDestinos(); break;
+      case 'syncBilling': await syncBilling(); break;
+      case 'verConceptos': await cargarFacturacion(true, b.dataset.key === S.facKey ? null : b.dataset.key); break;
       case 'recargar': S.ops = null; await cargarOps(true); break;
       case 'recargarCostos': await cargarCostos(true); break;
       case 'recargarStock': await cargarStock(true); break;
-      case 'recargarFacturas': pintarFacturas(); break;
+      case 'recargarFacturas': pintar('facturasLista', estadoCarga('Cargando facturas…')); await pintarFacturas(true); break;
       case 'cerrarModal': $('modalRaiz').innerHTML = ''; break;
       case 'confirmarOk': { const f = confirmarPendiente; confirmarPendiente = null; $('modalRaiz').innerHTML = ''; if (f) await f(); break; }
       case 'masOps': S.opFiltro.limite += CONFIG.FILAS_POR_PAGINA; render(); break;
-      case 'csvOps': descargarCsv('margenes_operaciones', ordenar(opsDeOperaciones(), S.opFiltro.orden), [['fecha','Fecha'],['ml_order_id','Orden'],['sku','SKU'],['item_id','Publicación'],['titulo','Título'],['listing_type','Tipo pub.'],['tipo_envio','Envío'],['units','Unidades'],['precio_lista_unit','Precio lista'],['precio_cobrado_unit','Precio cobrado'],['descuento_pct','Desc %'],['bruto','Bruto'],['comision','Comisión'],['comision_pct','Comisión %'],['envio','Envío $'],['neto_ml','Neto ML'],['costo_unit','Costo unit.'],['costo_total','Costo total'],['costo_fuente','Fuente costo'],['costo_fecha_ref','Fecha costo'],['costo_confiable','Costo confiable'],['brown','Brown'],['embalaje','Embalaje'],['prorrateo_facturas','Facturas ML'],['margen','Margen'],['margen_pct_neto','% neto'],['margen_pct_precio','% precio'],['semaforo','Semáforo']]); break;
-      case 'csvAgrup': { const ls = opsFiltradas(); const a = S.agrup; const g = a.por === 'sku' ? agruparPor(ls, (o) => o.sku) : a.por === 'publicacion' ? agruparPor(ls, (o) => o.item_id || '(sin id)', (o) => o.titulo || '') : a.por === 'envio' ? agruparPor(ls, (o) => o.tipo_envio || 'Sin dato') : a.por === 'tipo' ? agruparPor(ls, (o) => o.listing_type || '—') : agruparPor(ls, (o) => String(o.mes).slice(0, 7));
-        descargarCsv('margenes_por_' + a.por, ordenar(g, a.orden), [['clave', a.por], ['label','Detalle'], ['unidades','Unidades'], ['precioProm','Precio prom.'], ['bruto','Bruto'], ['comisionPct','Comisión %'], ['envioProm','Envío/orden'], ['neto','Neto ML'], ['costo','Costo'], ['margen','Margen'], ['margenPctNeto','% neto'], ['margenPctPrecio','% precio'], ['margenPorUnidad','Margen/u'], ['neg','Negativas'], ['bajo','Bajo umbral']]); break; }
+      case 'csvOps': descargarCsv('margenes_operaciones', ordenar(opsDeOperaciones(), S.opFiltro.orden), [['fecha','Fecha'],['ml_order_id','Orden'],['sku','SKU'],['item_id','Publicación'],['titulo','Título'],['listing_type','Tipo pub.'],['tipo_envio','Envío'],['units','Unidades'],['precio_lista_unit','Precio lista'],['precio_cobrado_unit','Precio cobrado'],['descuento_pct','Desc %'],['bruto','Bruto'],['comision','Comisión'],['comision_pct','Comisión %'],['envio','Envío $'],['neto_ml','Neto ML'],['costo_unit','Costo unit.'],['costo_total','Costo total'],['costo_fuente','Fuente costo'],['costo_fecha_ref','Fecha costo'],['costo_confiable','Costo confiable'],['zona_logistica','Zona Flex'],['brown_estimado','Zona estimada'],['brown','Logística Flex'],['embalaje','Embalaje'],['prorrateo_facturas','Facturas ML manuales'],['cargo_ml_periodo','Facturación ML imputada'],['iibb_periodo','Percepciones IIBB'],['iibb_descontado','IIBB descontado'],['margen','Margen'],['margen_pct_neto','% neto'],['margen_pct_precio','% precio'],['semaforo','Semáforo']]); break;
+      case 'csvAgrup': { const a = S.agrup; const g = gruposAgrupado(opsFiltradas(), a.por);
+        descargarCsv('margenes_por_' + a.por, ordenar(g, a.orden), [['clave', a.por], ['label','Detalle'], ['unidades','Unidades'], ['precioProm','Precio prom.'], ['bruto','Bruto'], ['comisionPct','Comisión %'], ['envioProm','Envío/orden'], ['brownTodo','Logística Flex'], ['flex','Envíos Flex'], ['neto','Neto ML'], ['costo','Costo'], ['margen','Margen'], ['margenPctNeto','% neto'], ['margenPctPrecio','% precio'], ['margenPorUnidad','Margen/u'], ['neg','Negativas'], ['bajo','Bajo umbral']]); break; }
       case 'csvStock': descargarCsv('stock_valorizado', ordenar(S.stock || [], S.stockVista.orden), [['sku','SKU'],['proveedor','Proveedor'],['propio','Propio'],['en_full','Full'],['total','Total'],['costo_unit','Costo real'],['costo_fuente','Fuente'],['valor','Valor'],['costo_maestro','Costo maestro'],['valor_maestro','Valor maestro'],['unidades_60d','Vendidas 60d'],['dias_cobertura','Cobertura días'],['ultima_venta','Última venta']]); break;
       case 'calcDesdeOp': $('modalRaiz').innerHTML = ''; precargarCalcSku(b.dataset.sku); S.tab = 'calculadora'; guardarPrefs(); render(); window.scrollTo(0, 0); break;
       case 'cgPreview': leerCarga(); if (!S.carga.texto.trim()) { toast('Pegá al menos una línea SKU + valor', 'err'); break; } S.carga.preview = prepararPreviewCarga(); render(); break;
@@ -1267,14 +1696,14 @@ document.addEventListener('click', async (ev) => {
       case 'guardarRegla': { const r = await api('regla_guardar', { proveedor_id: $('rgProv').value, metodo: $('rgMetodo').value, iva: n($('rgIva').value) / 100, desc_propio: n($('rgDesc').value) / 100 }); if (r.ok) { toast('Regla guardada', 'ok'); S.ops = null; S.stock = null; await cargarCostos(true); } break; }
       case 'guardarAjustes': {
         const v = (id) => $(id).value;
-        const r = await api('config_guardar', { umbral_margen_pct: v('ajUmbral'), brown_tarifa_flex: v('ajBrown') === '' ? null : v('ajBrown'), embalaje_por_orden: v('ajEmb') === '' ? null : v('ajEmb'), prorrateo_criterio: v('ajProrr') || null, costo_max_antiguedad_dias: v('ajAntig'), desde: v('ajDesde') });
-        S.config = r.config; S.ops = null; toast('Parámetros guardados: el margen se recalcula', 'ok'); render(); pintarFacturas(); break; }
+        const r = await api('config_guardar', { umbral_margen_pct: v('ajUmbral'), embalaje_por_orden: v('ajEmb') === '' ? null : v('ajEmb'), prorrateo_criterio: v('ajProrr') || null, costo_max_antiguedad_dias: v('ajAntig'), desde: v('ajDesde') });
+        S.config = r.config; S.ops = null; toast('Parámetros guardados: el margen se recalcula', 'ok'); render(); break; }
       case 'guardarFactura': {
         const per = $('fcPeriodo').value; const imp = parsearNumero($('fcImporte').value);
         if (!per || !$('fcConcepto').value.trim() || !imp) { toast('Completá mes, concepto e importe', 'err'); break; }
         await api('factura_guardar', { periodo: per + '-01', concepto: $('fcConcepto').value, importe: imp, alcance: $('fcAlcance').value, sku: $('fcSku').value });
-        toast('Concepto agregado', 'ok'); $('fcConcepto').value = ''; $('fcImporte').value = ''; S.ops = null; pintarFacturas(); break; }
-      case 'borrarFactura': confirmar('Se borra este concepto de factura.', async () => { await api('factura_borrar', { id: Number(b.dataset.id) }); toast('Concepto borrado', 'ok'); S.ops = null; pintarFacturas(); }, 'Borrar'); break;
+        toast('Concepto agregado', 'ok'); $('fcConcepto').value = ''; $('fcImporte').value = ''; S.ops = null; await pintarFacturas(true); break; }
+      case 'borrarFactura': confirmar('Se borra este concepto de factura.', async () => { await api('factura_borrar', { id: Number(b.dataset.id) }); toast('Concepto borrado', 'ok'); S.ops = null; await pintarFacturas(true); }, 'Borrar'); break;
     }
   } catch (e) { toast('⚠️ ' + e.message, 'err'); }
 });
@@ -1287,6 +1716,7 @@ document.addEventListener('input', (ev) => {
   if (id === 'opQ') { S.opFiltro.q = ev.target.value; S.opFiltro.limite = CONFIG.FILAS_POR_PAGINA; rerenderManteniendoFoco(id); }
   else if (id === 'agQ') { S.agrup.q = ev.target.value; rerenderManteniendoFoco(id); }
   else if (id === 'cvQ') { S.costosVista.q = ev.target.value; rerenderManteniendoFoco(id); }
+  else if (id === 'mapQ') { S.logVista.qMapeo = ev.target.value; rerenderManteniendoFoco(id); }
   else if (id && id.startsWith('cc') && id !== 'ccSku') { leerCalc(); calcularPrecioPiso(); }
 });
 document.addEventListener('change', (ev) => {
@@ -1299,6 +1729,11 @@ document.addEventListener('change', (ev) => {
   else if (id === 'chkLento') { S.stockVista.soloLento = ev.target.checked; render(); }
   else if (id === 'ccSku') { leerCalc(); if (CALC.sku) { precargarCalcSku(CALC.sku); render(); } }
   else if (id === 'ccModo') { leerCalc(); calcularPrecioPiso(); }
+  // al elegir "desde" de una liquidación se precargan las tarifas vigentes en esa fecha (se conservan los envíos tipeados)
+  else if (id === 'lqDesde' || id === 'lqHasta') {
+    S.logVista.liqDesde = $('lqDesde').value; S.logVista.liqHasta = $('lqHasta').value;
+    if (id === 'lqDesde') { const envs = []; let i = 0; while ($('lqEnv_' + i)) { envs.push($('lqEnv_' + i).value); i++; } render(); envs.forEach((v, j) => { if ($('lqEnv_' + j)) $('lqEnv_' + j).value = v; }); }
+  }
   else if (['cgModo', 'cgProv', 'cgVig'].includes(id)) { leerCarga(); if (S.carga.preview) { S.carga.preview = prepararPreviewCarga(); render(); } }
 });
 let debounceT;
@@ -1320,7 +1755,11 @@ function asegurarDatos() {
   if (['resumen', 'operaciones', 'agrupado', 'alertas', 'calculadora'].includes(S.tab)) cargarOps();
   if (S.tab === 'costos') cargarCostos();
   if (S.tab === 'stock') cargarStock();
-  if (S.tab === 'ajustes') pintarFacturas();
+  if (S.tab === 'ajustes') {
+    if (S.ajSub === 'logistica') cargarLogistica();
+    else if (S.ajSub === 'facturacion') cargarFacturacion();
+    else if (S.ajSub === 'manuales') pintarFacturas();
+  }
 }
 
 /* ============================================================
@@ -1352,7 +1791,7 @@ sb.auth.onAuthStateChange(async (_ev, session) => {
     }
     render(); asegurarDatos();
   } else {
-    S.auth = null; arrancado = false; S.ops = null; S.costos = null; S.stock = null;
+    S.auth = null; arrancado = false; S.ops = null; S.costos = null; S.stock = null; S.logistica = null; S.facturacion = null; S.facManuales = null;
     $('app').classList.add('oculto'); $('gate').classList.remove('oculto');
     $('gateBtn').disabled = false; $('gateBtn').textContent = 'Ingresar';
   }
